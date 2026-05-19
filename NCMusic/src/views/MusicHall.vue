@@ -1,4 +1,6 @@
-<script setup></script>
+<script setup>
+import api from "@/api";
+</script>
 
 <template>
 	<main>

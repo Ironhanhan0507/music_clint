@@ -1,6 +1,9 @@
 <script setup>
 import { ref, onMounted, computed } from "vue";
+import { useRouter } from "vue-router";
 import api from "@/api";
+
+const router = useRouter();
 
 // 推荐歌单
 const playlists = ref([]);
@@ -85,6 +88,16 @@ onMounted(() => {
 	fetchNewSongs();
 	fetchSingerList();
 });
+
+// 点击歌单跳转详情携带歌单id
+const handlePlayListClick = id => {
+	// 这里可以使用路由跳转到歌单详情页，携带歌单id参数
+	if (!id) return;
+	router.push({
+		name: "musiclist",
+		query: { id },
+	});
+};
 </script>
 
 <template>
@@ -93,7 +106,7 @@ onMounted(() => {
 		<div class="hall-inner">
 			<h2 class="section-title">推荐歌单</h2>
 			<ul class="playlist-list">
-				<li class="playlist-item" v-for="item in playlists" :key="item.id">
+				<li class="playlist-item" v-for="item in playlists" :key="item.id" @click="handlePlayListClick(item.id)">
 					<div class="cover-wrapper">
 						<img :src="item.cover" :alt="item.title" />
 					</div>

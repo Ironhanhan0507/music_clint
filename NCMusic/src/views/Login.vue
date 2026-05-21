@@ -86,21 +86,21 @@ const startQrCheck = key => {
 				clearInterval(qrCheckTimer.value);
 				qrCheckTimer.value = null;
 				console.log("登录成功!");
+				// 授权成功后再调用登录状态获取用户信息
+				const statusRes = await api.get("/login/status", {
+					timestamp: Date.now(),
+					ua: "pc",
+				});
+				const profile = statusRes.data?.profile || statusRes.profile || statusRes.account;
+				if (profile) {
+					// console.log("登录用户信息:", profile);
+					// 存储用户数据
+					userStore.setUser({ id: profile.userId, nickname: profile.nickname, avatar: profile.avatarUrl });
+				} else {
+					console.warn("未获取到登录用户信息");
+				}
+				router.push("/"); // 登录成功后跳转到主页
 			}
-			// 授权成功后再调用登录状态获取用户信息
-			const statusRes = await api.get("/login/status", {
-				timestamp: Date.now(),
-				ua: "pc",
-			});
-			const profile = statusRes.data?.profile || statusRes.profile || statusRes.account;
-			if (profile) {
-				// console.log("登录用户信息:", profile);
-				// 存储用户数据
-				userStore.setUser({ userId: profile.userId, nickname: profile.nickname, avatarUrl: profile.avatarUrl });
-			} else {
-				console.warn("未获取到登录用户信息");
-			}
-			router.push("/"); // 登录成功后跳转到主页
 		} catch (error) {
 			console.error("检查登录二维码状态失败:", error);
 		}

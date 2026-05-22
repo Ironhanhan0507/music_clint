@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, watch } from "vue";
+import { ref, onMounted, onUnmounted, watch } from "vue";
 import api from "@/api";
 import { useUserStore } from "@/stores/user";
 import { useRouter } from "vue-router";
@@ -118,6 +118,13 @@ watch(
 
 onMounted(() => {
 	fetchLoginKey();
+});
+onUnmounted(() => {
+	// 组件卸载前清除定时器
+	if (qrCheckTimer.value) {
+		clearInterval(qrCheckTimer.value);
+		qrCheckTimer.value = null;
+	}
 });
 
 // 点击空白关闭登录界面

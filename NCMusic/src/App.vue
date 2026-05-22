@@ -1,14 +1,18 @@
 <script setup>
-import { RouterLink, RouterView } from "vue-router";
+import { RouterLink, RouterView, useRouter } from "vue-router";
 import { ref } from "vue";
 import { useUserStore } from "@/stores/user";
 const userStore = useUserStore();
+const router = useRouter();
 //搜索内容
 // 使用 ref 创建了一个响应式的搜索关键词变量
 const searchKeyword = ref("");
 const handleSearch = () => {
 	const keyword = searchKeyword.value.trim();
-	console.log(keyword);
+	// console.log(keyword);
+	// 跳转到搜索结果页，并将搜索关键词作为查询参数传递
+	if (!keyword) return;
+	router.push({ name: "search", query: { keyword } });
 };
 
 // 用户头像点击事件

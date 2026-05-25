@@ -91,11 +91,28 @@ onMounted(() => {
 
 // 点击歌单跳转详情携带歌单id
 const handlePlayListClick = id => {
-	// 这里可以使用路由跳转到歌单详情页，携带歌单id参数
 	if (!id) return;
 	router.push({
 		name: "musiclist",
 		query: { id },
+	});
+};
+
+// 点击新音乐跳转到播放页面
+const handleSongClick = song => {
+	if (!song.id) return;
+	router.push({
+		name: "player",
+		query: { id: song.id },
+	});
+};
+
+// 点击歌手跳转到歌手详情页
+const handleSingerClick = singer => {
+	if (!singer.id) return;
+	router.push({
+		name: "singer",
+		query: { id: singer.id },
 	});
 };
 </script>
@@ -119,7 +136,7 @@ const handlePlayListClick = id => {
 			<!-- 推荐新音乐 -->
 			<h2 class="section-title section-title--sub">推荐新音乐</h2>
 			<ul class="song-list">
-				<li class="song-item" v-for="song in newSongs" :key="song.id">
+				<li class="song-item" v-for="song in newSongs" :key="song.id" @click="handleSongClick(song)">
 					<div class="song-cover">
 						<img :src="song.cover" :alt="song.name" />
 					</div>
@@ -135,7 +152,7 @@ const handlePlayListClick = id => {
 				<div class="singer-carousel-track">
 					<div class="singer-slide" v-for="(slide, index) in singerSlides" :key="index" v-show="currentSingerSlide === index">
 						<ul class="singer-list">
-							<li class="singer-item" v-for="singer in slide" :key="singer.id">
+							<li class="singer-item" v-for="singer in slide" :key="singer.id" @click="handleSingerClick(singer)">
 								<div class="singer-avatar">
 									<img :src="singer.avatar" :alt="singer.name" />
 								</div>

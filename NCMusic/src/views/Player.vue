@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, computed } from "vue";
+import { ref, onMounted, computed, watch, nextTick } from "vue";
 import api from "@/api";
 import { useRoute } from "vue-router";
 
@@ -12,7 +12,7 @@ const songArtist = ref("未知艺术家");
 const songAlbum = ref("未知专辑");
 const songCover = ref("https://via.placeholder.com/260x260.png?text=Cover");
 
-// 歌词
+// 歌词存储为对象数组，每个对象包含时间和文本
 const lyrics = ref([]);
 
 // 音乐播放地址
@@ -23,6 +23,48 @@ const isPlaying = ref(false);
 
 // 获取audio标签
 const audioRef = ref(null);
+
+// 当前高亮的歌词索引
+const highlightIndex = computed(() => {
+	if (!lyrics.value.length) return -1;
+	const time = currentTime.value;
+	let index = -1;
+	for (let i = 0; i < lyrics.value.length; i++) {
+		if (lyrics.value[i].time <= time) {
+			index = i;
+		} else {
+			break; // 因为歌词是按时间排序的，一旦超过就可以退出
+		}
+	}
+	return index;
+});
+
+// 监听高亮索引变化，自动滚动到对应歌词
+watch(highlightIndex, newIndex => {
+	if (newIndex >= 0) {
+		nextTick(() => {
+			const lyricsLines = document.querySelectorAll(".lyrics-line");
+			if (lyricsLines[newIndex]) {
+				lyricsLines[newIndex].scrollIntoView({
+					behavior: "smooth",
+					block: "center",
+				});
+			}
+		});
+	}
+});
+
+// 监听歌曲ID变化，重新加载数据
+watch(songId, () => {
+	// 重置播放状态
+	if (audioRef.value) {
+		audioRef.value.pause();
+		isPlaying.value = false;
+		currentTime.value = 0;
+		duration.value = 0;
+	}
+	loadSongData();
+});
 
 // 加载歌曲元数据
 const handleLoadedMetadata = () => {
@@ -50,11 +92,9 @@ const fetchSongDetail = async () => {
 		if (!id) return;
 		const res = await api.get("/song/detail", { ids: id });
 		console.log("歌曲详情数据:", res);
-		// TODO: 处理歌曲详情数据
 		const detail = res.songs?.[0];
 		console.log(detail);
 		if (detail) {
-			// 处理歌曲详情数据：
 			songTitle.value = detail.name || "未知歌曲";
 			songArtist.value = detail.ar.map(artist => artist.name).join(", ") || "未知艺术家";
 			songAlbum.value = detail.al?.name || "未知专辑";
@@ -74,22 +114,65 @@ const fetchLyrics = async () => {
 		console.log("歌词数据:", res);
 		const raw = res.lrc?.lyric || "";
 		// 解析获取到的歌词数据
-		parseLyric(raw);
-		console.log(parseLyric(raw));
-		lyrics.value = parseLyric(raw);
+		const parsedLyrics = parseLyric(raw);
+		lyrics.value = parsedLyrics;
+		console.log("解析后的歌词:", parsedLyrics);
 	} catch (error) {
 		console.error("Failed to fetch lyrics获取歌词失败:", error);
+		lyrics.value = [];
 	}
 };
-// 解析歌词
+
+// 解析歌词（带时间戳）
 const parseLyric = raw => {
-	return raw
-		.split("\n") // 1. 按换行符 \n 切割，把一整段歌词切成【每一行】的数组
-		.map(line => line.trim()) // 2. 遍历数组，给每一行歌词 去掉首尾的空格/空白字符
-		.filter(line => line) // 3. 过滤：删除空行（空字符串、只有空格的行）
-		.map(line => {
-			return line.replace(/^\[[^\]]*]/g, "").trim(); // 4. 遍历数组，删除每一行开头的 [时间标签]，再去掉首尾空格
-		});
+	if (!raw) return [];
+
+	const lines = raw.split("\n"); // 按行分割
+	const lyricItems = [];
+
+	for (const line of lines) {
+		const trimmedLine = line.trim();
+		if (!trimmedLine) continue;
+
+		// 正则匹配时间标签，格式如 [00:12.34] 或 [01:23]
+		const timeRegex = /\[(\d{2}):(\d{2})(?:\.(\d{2,3}))?\]/g;
+		let match;
+		let firstTime = null;
+		let text = trimmedLine;
+
+		// 收集所有匹配到的时间标签
+		const times = [];
+		while ((match = timeRegex.exec(trimmedLine)) !== null) {
+			const minutes = parseInt(match[1], 10);
+			const seconds = parseInt(match[2], 10);
+			let milliseconds = 0;
+			if (match[3]) {
+				// 处理毫秒，可能是2位或3位
+				milliseconds = parseInt(match[3].padEnd(3, "0"), 10);
+			}
+			const totalSeconds = minutes * 60 + seconds + milliseconds / 1000;
+			times.push(totalSeconds);
+		}
+
+		if (times.length > 0) {
+			firstTime = times[0]; // 取第一个时间标签
+			// 移除所有时间标签
+			text = trimmedLine.replace(/\[[^\]]*\]/g, "").trim();
+		}
+
+		// 只有有时间标签且文本不为空的才加入
+		if (firstTime !== null && text) {
+			lyricItems.push({
+				time: firstTime,
+				text: text,
+			});
+		}
+	}
+
+	// 按时间排序
+	lyricItems.sort((a, b) => a.time - b.time);
+
+	return lyricItems;
 };
 
 // 获取播放地址
@@ -106,6 +189,11 @@ const fetchSongUrl = async () => {
 	} catch (error) {
 		console.error("Failed to fetch song URL获取歌曲播放地址失败:", error);
 	}
+};
+
+// 加载所有歌曲数据
+const loadSongData = async () => {
+	await Promise.all([fetchSongDetail(), fetchLyrics(), fetchSongUrl()]);
 };
 
 // 播放事件
@@ -141,6 +229,7 @@ const handleTimeUpdate = () => {
 		duration.value = audio.duration;
 	}
 };
+
 // 点击进度条
 const handleProgressClick = e => {
 	const bar = e.currentTarget;
@@ -155,9 +244,7 @@ const handleProgressClick = e => {
 
 onMounted(() => {
 	console.log("当前歌曲ID:", songId.value);
-	fetchSongDetail();
-	fetchLyrics();
-	fetchSongUrl();
+	loadSongData();
 });
 </script>
 
@@ -184,8 +271,8 @@ onMounted(() => {
 						<h3 class="lyrics-title">歌词</h3>
 						<div class="lyrics-content">
 							<template v-if="lyrics.length">
-								<p class="lyrics-line" v-for="(line, index) in lyrics" :key="index" :class="{ 'lyrics-line--highlight': index === 0 }">
-									{{ line }}
+								<p v-for="(line, index) in lyrics" :key="index" class="lyrics-line" :class="{ 'lyrics-line--highlight': highlightIndex === index }">
+									{{ line.text }}
 								</p>
 							</template>
 							<p v-else class="lyrics-line">暂无歌词</p>
@@ -325,10 +412,9 @@ onMounted(() => {
 	line-height: 1.6;
 	color: rgba(255, 255, 255, 0.65);
 	text-align: center;
-	transition:
-		color 0.2s ease,
-		transform 0.2s ease;
+	transition: all 0.2s ease;
 	white-space: normal;
+	cursor: default;
 }
 
 .lyrics-line--highlight {

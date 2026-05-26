@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, computed, watch, nextTick } from "vue";
+import { ref, onMounted, computed, watch, nextTick, onBeforeUnmount } from "vue";
 import api from "@/api";
 import { useRoute } from "vue-router";
 
@@ -23,6 +23,12 @@ const isPlaying = ref(false);
 
 // 获取audio标签
 const audioRef = ref(null);
+
+// 评论相关状态
+const isCommentModalVisible = ref(false);
+const comments = ref([]);
+const commentLoading = ref(false);
+const commentTotal = ref(0);
 
 // 当前高亮的歌词索引
 const highlightIndex = computed(() => {
@@ -54,7 +60,7 @@ watch(highlightIndex, newIndex => {
 	}
 });
 
-// 监听歌曲ID变化，重新加载数据
+// 监听歌曲ID变化，重新加载数据，并关闭评论弹窗
 watch(songId, () => {
 	// 重置播放状态
 	if (audioRef.value) {
@@ -63,7 +69,22 @@ watch(songId, () => {
 		currentTime.value = 0;
 		duration.value = 0;
 	}
+	// 切换歌曲时关闭评论弹窗并清空评论
+	if (isCommentModalVisible.value) {
+		isCommentModalVisible.value = false;
+	}
+	comments.value = [];
+	commentTotal.value = 0;
 	loadSongData();
+});
+
+// 控制body滚动，防止弹窗打开时背景滚动
+watch(isCommentModalVisible, newVal => {
+	if (newVal) {
+		document.body.style.overflow = "hidden";
+	} else {
+		document.body.style.overflow = "";
+	}
 });
 
 // 加载歌曲元数据
@@ -83,6 +104,16 @@ const fmtTime = seconds => {
 	const mm = m.toString().padStart(2, "0");
 	const ss = rs.toString().padStart(2, "0");
 	return `${mm}:${ss}`;
+};
+
+// 格式化评论时间
+const fmtCommentTime = timestamp => {
+	if (!timestamp) return "未知时间";
+	const date = new Date(timestamp);
+	const year = date.getFullYear();
+	const month = (date.getMonth() + 1).toString().padStart(2, "0");
+	const day = date.getDate().toString().padStart(2, "0");
+	return `${year}-${month}-${day}`;
 };
 
 // 获取歌曲详情
@@ -242,9 +273,81 @@ const handleProgressClick = e => {
 	currentTime.value = newTime;
 };
 
+// 获取评论
+const fetchComments = async () => {
+	const id = songId.value;
+	if (!id) {
+		console.warn("无法获取评论: 缺少歌曲ID");
+		return;
+	}
+	commentLoading.value = true;
+	try {
+		const res = await api.get("/comment/music", { id });
+		if (res.code === 200) {
+			comments.value = res.comments || [];
+			commentTotal.value = res.total || 0;
+		} else {
+			comments.value = [];
+			commentTotal.value = 0;
+		}
+	} catch (error) {
+		console.error("获取评论失败:", error);
+		comments.value = [];
+		commentTotal.value = 0;
+	} finally {
+		commentLoading.value = false;
+	}
+};
+
+// 打开评论弹窗
+const openCommentModal = () => {
+	if (!songId.value) {
+		console.warn("当前没有播放的歌曲，无法查看评论");
+		return;
+	}
+	isCommentModalVisible.value = true;
+	// 打开弹窗时加载最新评论（如果comments为空或者为了刷新可重新加载，这里每次都重新拉取保证最新）
+	fetchComments();
+};
+
+// 关闭评论弹窗
+const closeCommentModal = () => {
+	isCommentModalVisible.value = false;
+};
+
+// 阻止弹窗内容区域的点击事件冒泡，防止点击内容区域关闭弹窗
+const stopPropagation = e => {
+	e.stopPropagation();
+};
+
+// 排序相关
+const sortType = ref("hot"); // 'hot' 热度排序，'time' 时间排序
+
+// 对评论进行排序（原地排序）
+const applySort = () => {
+	if (!comments.value.length) return;
+	if (sortType.value === "hot") {
+		comments.value.sort((a, b) => (b.likedCount || 0) - (a.likedCount || 0));
+	} else if (sortType.value === "time") {
+		comments.value.sort((a, b) => (b.time || 0) - (a.time || 0));
+	}
+};
+
+// 切换排序方式
+const changeSortType = type => {
+	if (sortType.value === type) return;
+	sortType.value = type;
+	applySort();
+};
+
 onMounted(() => {
 	console.log("当前歌曲ID:", songId.value);
 	loadSongData();
+});
+
+onBeforeUnmount(() => {
+	// 组件卸载前恢复body滚动
+	document.body.style.overflow = "";
 });
 </script>
 
@@ -268,7 +371,10 @@ onMounted(() => {
 				<!-- 右侧歌词信息 -->
 				<div class="player-right">
 					<div class="lyrics-card">
-						<h3 class="lyrics-title">歌词</h3>
+						<div class="lyrics-header">
+							<h3 class="lyrics-title">歌词</h3>
+							<button class="comment-btn" @click="openCommentModal">💬 评论</button>
+						</div>
 						<div class="lyrics-content">
 							<template v-if="lyrics.length">
 								<p v-for="(line, index) in lyrics" :key="index" class="lyrics-line" :class="{ 'lyrics-line--highlight': highlightIndex === index }">
@@ -295,6 +401,60 @@ onMounted(() => {
 				<audio :src="audioUrl" v-if="audioUrl" class="audio-hidden" ref="audioRef" @loadedmetadata="handleLoadedMetadata" @timeupdate="handleTimeUpdate" @ended="handleAudioEnded"></audio>
 			</div>
 		</div>
+
+		<!-- 评论弹窗 Modal -->
+		<Teleport to="body">
+			<div v-if="isCommentModalVisible" class="comment-modal-overlay" @click="closeCommentModal">
+				<div class="comment-modal-container" @click="stopPropagation">
+					<div class="comment-modal-header">
+						<h3>歌曲评论</h3>
+						<button class="close-modal-btn" @click="closeCommentModal">✕</button>
+					</div>
+					<div class="comment-modal-body">
+						<div class="comment-song-info">
+							<img class="comment-song-cover" :src="songCover" alt="封面" />
+							<div class="comment-song-detail">
+								<p class="comment-song-title">{{ songTitle }}</p>
+								<p class="comment-song-artist">{{ songArtist }}</p>
+							</div>
+						</div>
+						<div class="comment-stat">
+							<span>共 {{ commentTotal }} 条评论</span>
+							<div class="sort-buttons">
+								<button class="sort-btn" :class="{ active: sortType === 'hot' }" @click="changeSortType('hot')">🔥 热度</button>
+								<button class="sort-btn" :class="{ active: sortType === 'time' }" @click="changeSortType('time')">🕒 时间</button>
+							</div>
+						</div>
+						<div class="comment-list" v-if="!commentLoading">
+							<div v-if="comments.length" class="comment-items">
+								<div v-for="(comment, idx) in comments" :key="idx" class="comment-item">
+									<div class="comment-avatar">
+										<img v-if="comment.user.avatarUrl" :src="comment.user.avatarUrl" alt="头像" />
+										<div v-else class="default-avatar">🎵</div>
+									</div>
+									<div class="comment-content">
+										<div class="comment-user-info">
+											<span class="comment-nickname">{{ comment.user.nickname }}</span>
+											<span class="comment-time">{{ fmtCommentTime(comment.time) }}</span>
+										</div>
+										<p class="comment-text">{{ comment.content }}</p>
+										<div class="comment-like">
+											<span class="like-icon">❤️</span>
+											<span>{{ comment.likedCount || 0 }}</span>
+										</div>
+									</div>
+								</div>
+							</div>
+							<div v-else class="empty-comment">暂无评论，快来抢沙发吧~</div>
+						</div>
+						<div v-else class="comment-loading">
+							<div class="loading-spinner"></div>
+							<span>加载评论中...</span>
+						</div>
+					</div>
+				</div>
+			</div>
+		</Teleport>
 	</div>
 </template>
 
@@ -391,12 +551,40 @@ onMounted(() => {
 	box-sizing: border-box;
 }
 
+.lyrics-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	margin-bottom: 16px;
+}
+
 .lyrics-title {
-	margin: 0 0 16px;
+	margin: 0;
 	font-size: 18px;
 	color: #fff;
 	text-align: center;
 	letter-spacing: 1px;
+}
+
+.comment-btn {
+	background: rgba(255, 255, 255, 0.08);
+	border: 1px solid rgba(255, 255, 255, 0.2);
+	color: #f5f5f5;
+	font-size: 14px;
+	padding: 6px 14px;
+	border-radius: 30px;
+	cursor: pointer;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	transition: all 0.2s ease;
+	font-weight: 500;
+}
+
+.comment-btn:hover {
+	background: rgba(255, 255, 255, 0.2);
+	border-color: rgba(255, 255, 255, 0.4);
+	transform: translateY(-1px);
 }
 
 .lyrics-content {
@@ -498,6 +686,7 @@ onMounted(() => {
 	border-radius: 999px;
 	background: rgba(255, 255, 255, 0.2);
 	overflow: hidden;
+	cursor: pointer;
 }
 
 .progress-inner {
@@ -506,21 +695,263 @@ onMounted(() => {
 	background: linear-gradient(90deg, #ff4b2b, #ff416c);
 }
 
-.controls-extra {
-	display: none;
+/* 评论弹窗样式 */
+.comment-modal-overlay {
+	position: fixed;
+	top: 0;
+	left: 0;
+	width: 100%;
+	height: 100%;
+	background-color: rgba(0, 0, 0, 0.75);
+	backdrop-filter: blur(8px);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	z-index: 2000;
+	padding: 20px;
+	box-sizing: border-box;
 }
 
-.extra-left,
-.extra-right {
-	display: none;
+.comment-modal-container {
+	background: #1e1e2f;
+	border-radius: 28px;
+	width: 100%;
+	max-width: 560px;
+	max-height: 85vh;
+	display: flex;
+	flex-direction: column;
+	box-shadow: 0 25px 40px rgba(0, 0, 0, 0.5);
+	border: 1px solid rgba(255, 255, 255, 0.1);
+	overflow: hidden;
+	animation: fadeSlideUp 0.2s ease-out;
 }
 
-.btn-text {
-	display: none;
+@keyframes fadeSlideUp {
+	from {
+		opacity: 0;
+		transform: translateY(20px);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
 }
 
-.btn-text:hover {
+.comment-modal-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	padding: 18px 24px;
+	border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.comment-modal-header h3 {
+	margin: 0;
+	font-size: 20px;
+	font-weight: 600;
 	color: #fff;
+}
+
+.close-modal-btn {
+	background: transparent;
+	border: none;
+	color: #aaa;
+	font-size: 24px;
+	cursor: pointer;
+	transition: color 0.2s;
+	line-height: 1;
+	padding: 0;
+	width: 32px;
+	height: 32px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	border-radius: 50%;
+}
+
+.close-modal-btn:hover {
+	color: #fff;
+	background: rgba(255, 255, 255, 0.1);
+}
+
+.comment-modal-body {
+	flex: 1;
+	overflow-y: auto;
+	padding: 20px 24px;
+	scrollbar-width: thin;
+	scrollbar-color: #555 #2c2c3a;
+}
+
+.comment-modal-body::-webkit-scrollbar {
+	width: 5px;
+}
+
+.comment-modal-body::-webkit-scrollbar-track {
+	background: #2c2c3a;
+	border-radius: 10px;
+}
+
+.comment-modal-body::-webkit-scrollbar-thumb {
+	background: #555;
+	border-radius: 10px;
+}
+
+.comment-song-info {
+	display: flex;
+	align-items: center;
+	gap: 14px;
+	margin-bottom: 20px;
+	padding-bottom: 16px;
+	border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.comment-song-cover {
+	width: 48px;
+	height: 48px;
+	border-radius: 12px;
+	object-fit: cover;
+	box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+}
+
+.comment-song-detail {
+	flex: 1;
+}
+
+.comment-song-title {
+	font-size: 16px;
+	font-weight: 600;
+	margin: 0 0 4px;
+	color: #fff;
+}
+
+.comment-song-artist {
+	font-size: 12px;
+	margin: 0;
+	color: #bbb;
+}
+
+.comment-stat {
+	font-size: 13px;
+	color: #bbb;
+	margin-bottom: 18px;
+	font-weight: 500;
+}
+
+.comment-list {
+	min-height: 200px;
+}
+
+.comment-items {
+	display: flex;
+	flex-direction: column;
+	gap: 20px;
+}
+
+.comment-item {
+	display: flex;
+	gap: 14px;
+}
+
+.comment-avatar {
+	flex-shrink: 0;
+	width: 36px;
+	height: 36px;
+	border-radius: 50%;
+	background: #2c2c3a;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	overflow: hidden;
+}
+
+.comment-avatar img {
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+}
+
+.default-avatar {
+	font-size: 18px;
+	color: #ff7e5e;
+}
+
+.comment-content {
+	flex: 1;
+}
+
+.comment-user-info {
+	display: flex;
+	align-items: baseline;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-bottom: 6px;
+}
+
+.comment-nickname {
+	font-size: 14px;
+	font-weight: 600;
+	color: #ffa07a;
+}
+
+.comment-time {
+	font-size: 11px;
+	color: #888;
+}
+
+.comment-text {
+	margin: 6px 0 8px;
+	font-size: 14px;
+	line-height: 1.5;
+	color: #e0e0e0;
+	word-break: break-word;
+}
+
+.comment-like {
+	display: flex;
+	align-items: center;
+	gap: 5px;
+	font-size: 12px;
+	color: #ccc;
+}
+
+.like-icon {
+	cursor: default;
+	font-size: 14px;
+}
+
+.empty-comment {
+	text-align: center;
+	padding: 40px 20px;
+	color: #aaa;
+	font-size: 14px;
+}
+
+.comment-loading {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	padding: 50px;
+	gap: 12px;
+	color: #ccc;
+}
+
+.loading-spinner {
+	width: 32px;
+	height: 32px;
+	border: 3px solid rgba(255, 255, 255, 0.2);
+	border-top: 3px solid #ff6b4a;
+	border-radius: 50%;
+	animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+	0% {
+		transform: rotate(0deg);
+	}
+	100% {
+		transform: rotate(360deg);
+	}
 }
 
 @media (max-width: 960px) {
@@ -536,5 +967,43 @@ onMounted(() => {
 	.player-left {
 		width: auto;
 	}
+
+	.comment-modal-container {
+		max-width: 90%;
+	}
+}
+.comment-stat {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	margin-bottom: 18px;
+	font-size: 13px;
+	color: #bbb;
+}
+
+.sort-buttons {
+	display: flex;
+	gap: 12px;
+}
+
+.sort-btn {
+	background: transparent;
+	border: none;
+	color: #aaa;
+	font-size: 13px;
+	cursor: pointer;
+	padding: 4px 8px;
+	border-radius: 20px;
+	transition: all 0.2s;
+}
+
+.sort-btn:hover {
+	color: #fff;
+	background: rgba(255, 255, 255, 0.1);
+}
+
+.sort-btn.active {
+	color: #ff7e5e;
+	background: rgba(255, 126, 94, 0.15);
 }
 </style>

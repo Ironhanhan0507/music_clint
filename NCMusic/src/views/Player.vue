@@ -30,6 +30,10 @@ const comments = ref([]);
 const commentLoading = ref(false);
 const commentTotal = ref(0);
 
+const commentPage = ref(1); // 当前页码
+const commentHasMore = ref(true); // 是否还有更多评论
+const commentLoadingMore = ref(false); // 是否正在加载更多
+
 // 当前高亮的歌词索引
 const highlightIndex = computed(() => {
 	if (!lyrics.value.length) return -1;
@@ -273,41 +277,74 @@ const handleProgressClick = e => {
 	currentTime.value = newTime;
 };
 
-// 获取评论
-const fetchComments = async () => {
+// 获取评论（支持分页）
+// reset = true 表示重新加载第一页（清空已有评论）
+const fetchComments = async (reset = true) => {
 	const id = songId.value;
 	if (!id) {
 		console.warn("无法获取评论: 缺少歌曲ID");
 		return;
 	}
-	commentLoading.value = true;
+
+	if (reset) {
+		// 重置分页状态
+		commentPage.value = 1;
+		comments.value = [];
+		commentHasMore.value = true;
+		commentLoading.value = true; // 全屏加载状态
+	} else {
+		if (!commentHasMore.value || commentLoadingMore.value) return;
+		commentLoadingMore.value = true;
+	}
+
 	try {
-		const res = await api.get("/comment/music", { id });
+		const limit = 30; // 每页条数
+		const offset = (commentPage.value - 1) * limit;
+		const res = await api.get("/comment/music", {
+			id,
+			limit,
+			offset,
+		});
+
 		if (res.code === 200) {
-			comments.value = res.comments || [];
+			const newComments = res.comments || [];
+			if (reset) {
+				comments.value = newComments;
+			} else {
+				comments.value = [...comments.value, ...newComments];
+			}
 			commentTotal.value = res.total || 0;
+			// 判断是否还有更多
+			commentHasMore.value = comments.value.length < commentTotal.value;
+			// 如果当前有排序规则，重新排序（可选）
+			applySort();
 		} else {
-			comments.value = [];
-			commentTotal.value = 0;
+			if (reset) comments.value = [];
+			commentHasMore.value = false;
 		}
 	} catch (error) {
 		console.error("获取评论失败:", error);
-		comments.value = [];
-		commentTotal.value = 0;
+		if (reset) comments.value = [];
+		commentHasMore.value = false;
 	} finally {
-		commentLoading.value = false;
+		if (reset) {
+			commentLoading.value = false;
+		} else {
+			commentLoadingMore.value = false;
+		}
 	}
 };
 
+const loadMoreComments = () => {
+	if (!commentHasMore.value || commentLoadingMore.value || commentLoading.value) return;
+	commentPage.value++;
+	fetchComments(false);
+};
 // 打开评论弹窗
 const openCommentModal = () => {
-	if (!songId.value) {
-		console.warn("当前没有播放的歌曲，无法查看评论");
-		return;
-	}
+	if (!songId.value) return;
 	isCommentModalVisible.value = true;
-	// 打开弹窗时加载最新评论（如果comments为空或者为了刷新可重新加载，这里每次都重新拉取保证最新）
-	fetchComments();
+	fetchComments(true); // 重置并加载第一页
 };
 
 // 关闭评论弹窗
@@ -446,11 +483,16 @@ onBeforeUnmount(() => {
 								</div>
 							</div>
 							<div v-else class="empty-comment">暂无评论，快来抢沙发吧~</div>
+							<div v-if="commentHasMore && !commentLoadingMore" class="load-more-btn" @click="loadMoreComments">加载更多评论</div>
+							<div v-if="commentLoadingMore" class="comment-loading" style="padding: 20px">
+								<div class="loading-spinner"></div>
+								<span>加载中...</span>
+							</div>
 						</div>
-						<div v-else class="comment-loading">
+						<!-- <div v-else class="comment-loading">
 							<div class="loading-spinner"></div>
 							<span>加载评论中...</span>
-						</div>
+						</div> -->
 					</div>
 				</div>
 			</div>
@@ -1005,5 +1047,21 @@ onBeforeUnmount(() => {
 .sort-btn.active {
 	color: #ff7e5e;
 	background: rgba(255, 126, 94, 0.15);
+}
+
+.load-more-btn {
+	text-align: center;
+	margin-top: 20px;
+	padding: 10px;
+	background: rgba(255, 255, 255, 0.05);
+	border-radius: 30px;
+	cursor: pointer;
+	font-size: 14px;
+	color: #ccc;
+	transition: all 0.2s;
+}
+.load-more-btn:hover {
+	background: rgba(255, 255, 255, 0.1);
+	color: #fff;
 }
 </style>

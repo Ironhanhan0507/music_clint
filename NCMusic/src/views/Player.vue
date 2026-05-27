@@ -83,10 +83,6 @@
 						</div>
 						<div class="comment-stat">
 							<span>共 {{ commentTotal }} 条评论</span>
-							<div class="sort-buttons">
-								<button class="sort-btn" :class="{ active: sortType === 'hot' }" @click="changeSortType('hot')">最热</button>
-								<button class="sort-btn" :class="{ active: sortType === 'time' }" @click="changeSortType('time')">最新</button>
-							</div>
 						</div>
 						<div class="comment-list">
 							<div v-if="commentLoading" class="comment-loading">
@@ -181,7 +177,8 @@ const commentTotal = ref(0);
 const commentPage = ref(1);
 const commentHasMore = ref(true);
 const commentLoadingMore = ref(false);
-const sortType = ref("hot");
+// 请求竞态控制
+let currentFetchId = 0;
 
 // 事件处理器
 let playHandler = null;
@@ -373,15 +370,13 @@ const getPrevTrackId = () => {
 	}
 };
 
-// 切换歌曲（新增 forceAutoPlay 参数）
+// 切换歌曲
 const switchToSongId = async (newId, forceAutoPlay = false) => {
 	if (!newId) return;
 	const audio = audioRef.value;
 	if (forceAutoPlay) {
-		// 自动切歌（如自然播放结束）强制自动播放
 		autoPlayNext.value = true;
 	} else {
-		// 手动切歌：根据当前音频是否在播放来决定
 		autoPlayNext.value = audio ? !audio.paused : true;
 	}
 
@@ -399,7 +394,7 @@ const switchToSongId = async (newId, forceAutoPlay = false) => {
 const nextTrack = () => {
 	if (!playlistTracks.value.length) return;
 	const nextId = getNextTrackId();
-	switchToSongId(nextId, false); // 手动切歌，不强制播放
+	switchToSongId(nextId, false);
 };
 
 const prevTrack = () => {
@@ -525,7 +520,7 @@ const bindAudioEvents = () => {
 		if (playMode.value === "loop") return;
 		const nextId = getNextTrackId();
 		if (nextId) {
-			switchToSongId(nextId, true); // 自然播放结束，强制自动播放
+			switchToSongId(nextId, true);
 		}
 	};
 	timeUpdateHandler = () => {
@@ -564,7 +559,7 @@ const fmtTime = seconds => {
 	return `${m.toString().padStart(2, "0")}:${rs.toString().padStart(2, "0")}`;
 };
 
-// ------------------- 评论功能 -------------------
+// ------------------- 评论功能（无排序，按 API 原始顺序） -------------------
 const fmtCommentTime = timestamp => {
 	if (!timestamp) return "未知时间";
 	const date = new Date(timestamp);
@@ -573,20 +568,30 @@ const fmtCommentTime = timestamp => {
 
 const fetchComments = async (reset = true) => {
 	if (!songId.value) return;
+
+	const thisFetchId = ++currentFetchId;
+	const currentSongId = songId.value;
+
 	if (reset) {
 		commentPage.value = 1;
 		commentHasMore.value = true;
 		commentLoading.value = true;
+		comments.value = [];
 	}
 	try {
 		const limit = 20;
 		const offset = (commentPage.value - 1) * limit;
+		// 不传递任何排序参数，使用接口默认排序
 		const res = await api.get("/comment/music", {
 			id: songId.value,
 			limit,
 			offset,
-			sortType: sortType.value,
 		});
+
+		if (thisFetchId !== currentFetchId || songId.value !== currentSongId) {
+			return;
+		}
+
 		const data = res.data || res;
 		const newComments = data.comments || [];
 		if (reset) {
@@ -598,9 +603,13 @@ const fetchComments = async (reset = true) => {
 		commentHasMore.value = newComments.length === limit && comments.value.length < commentTotal.value;
 	} catch (error) {
 		console.error("获取评论失败:", error);
-		if (reset) comments.value = [];
+		if (reset && thisFetchId === currentFetchId && songId.value === currentSongId) {
+			comments.value = [];
+		}
 	} finally {
-		if (reset) commentLoading.value = false;
+		if (reset && thisFetchId === currentFetchId && songId.value === currentSongId) {
+			commentLoading.value = false;
+		}
 		commentLoadingMore.value = false;
 	}
 };
@@ -614,9 +623,7 @@ const loadMoreComments = async () => {
 
 const openCommentModal = () => {
 	isCommentModalVisible.value = true;
-	if (comments.value.length === 0 && !commentLoading.value) {
-		fetchComments(true);
-	}
+	fetchComments(true);
 };
 
 const closeCommentModal = () => {
@@ -625,13 +632,7 @@ const closeCommentModal = () => {
 
 const stopPropagation = e => e.stopPropagation();
 
-const changeSortType = type => {
-	if (sortType.value === type) return;
-	sortType.value = type;
-	fetchComments(true);
-};
-
-// 监听路由变化
+// ------------------- 路由监听 -------------------
 watch([source, playlistId, singerId], async () => {
 	await loadPlaylist();
 	updateCurrentTrackIndex();
@@ -639,6 +640,11 @@ watch([source, playlistId, singerId], async () => {
 
 watch(songId, async () => {
 	if (!songId.value) return;
+
+	if (isCommentModalVisible.value) {
+		isCommentModalVisible.value = false;
+	}
+
 	audioUrl.value = "";
 	await Promise.all([fetchSongDetail(), fetchLyrics(), fetchSongUrl()]);
 	updateCurrentTrackIndex();
@@ -1081,32 +1087,6 @@ onBeforeUnmount(() => {
 	margin-bottom: 18px;
 	font-size: 13px;
 	color: #bbb;
-}
-
-.sort-buttons {
-	display: flex;
-	gap: 12px;
-}
-
-.sort-btn {
-	background: transparent;
-	border: none;
-	color: #aaa;
-	font-size: 13px;
-	cursor: pointer;
-	padding: 4px 8px;
-	border-radius: 20px;
-	transition: all 0.2s;
-}
-
-.sort-btn:hover {
-	color: #fff;
-	background: rgba(255, 255, 255, 0.1);
-}
-
-.sort-btn.active {
-	color: #ff7e5e;
-	background: rgba(255, 126, 94, 0.15);
 }
 
 .comment-list {

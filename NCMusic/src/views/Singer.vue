@@ -61,7 +61,11 @@ const playSong = songId => {
 	if (!songId) return;
 	router.push({
 		name: "player",
-		query: { id: songId },
+		query: {
+			id: songId,
+			singerId: singerId.value,
+			source: "singer",
+		},
 	});
 };
 // 格式化时长（毫秒转 mm:ss）- 修复版

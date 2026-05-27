@@ -1,7 +1,7 @@
-// Player.vue
 <template>
 	<div class="player-page">
 		<div class="player-inner">
+			<!-- 左右布局容器 -->
 			<div class="player-main">
 				<!-- 左侧封面与基本信息 -->
 				<div class="player-left">
@@ -17,6 +17,7 @@
 						<p class="playlist-index" v-if="playlistTracks.length">{{ currentTrackIndex + 1 }} / {{ playlistTracks.length }}</p>
 					</div>
 				</div>
+
 				<!-- 右侧歌词 -->
 				<div class="player-right">
 					<div class="lyrics-card">
@@ -24,7 +25,7 @@
 							<h3 class="lyrics-title">歌词</h3>
 							<button class="comment-btn" @click="openCommentModal">💬 评论</button>
 						</div>
-						<div class="lyrics-content">
+						<div class="lyrics-content" ref="lyricsContentRef">
 							<template v-if="lyrics.length">
 								<p v-for="(line, index) in lyrics" :key="index" class="lyrics-line" :class="{ 'lyrics-line--highlight': highlightIndex === index }">
 									{{ line.text }}
@@ -35,28 +36,33 @@
 					</div>
 				</div>
 			</div>
+		</div>
 
-			<!-- 底部控制区 -->
-			<div class="player-controls">
-				<div class="controls-main">
-					<button class="btn-circle btn-small" @click="toggleLoop" :title="isLoop ? '关闭单曲循环' : '开启单曲循环'">
-						{{ isLoop ? "🔂" : "🔁" }}
-					</button>
-					<button class="btn-circle btn-small" @click="prevTrack" :disabled="!canSwitchPrev" title="上一首">⏮</button>
-					<button class="btn-circle btn-large" @click="handleTogglePlay">
-						{{ isPlaying ? "⏸" : "▶" }}
-					</button>
-					<button class="btn-circle btn-small" @click="nextTrack" :disabled="!canSwitchNext" title="下一首">⏭</button>
-				</div>
-				<div class="progress-wrap">
-					<span class="time-label">{{ fmtTime(currentTime) }}</span>
-					<div class="progress-bar" @click="handleProgressClick">
-						<div class="progress-inner" :style="{ width: duration ? `${(currentTime / duration) * 100}%` : '0%' }"></div>
-					</div>
-					<span class="time-label">{{ fmtTime(duration) }}</span>
-				</div>
-				<audio :src="audioUrl" v-if="audioUrl" class="audio-hidden" ref="audioRef"></audio>
+		<!-- 底部控制区 -->
+		<div class="player-controls">
+			<div class="controls-main">
+				<button class="btn-circle btn-small" @click="togglePlayMode" :title="playModeTitle">
+					{{ playModeIcon }}
+				</button>
+				<button class="btn-circle btn-small" @click="prevTrack" :disabled="!canSwitchPrev" title="上一首">⏮</button>
+				<button class="btn-circle btn-large" @click="handleTogglePlay">
+					{{ isPlaying ? "⏸" : "▶" }}
+				</button>
+				<button class="btn-circle btn-small" @click="nextTrack" :disabled="!canSwitchNext" title="下一首">⏭</button>
 			</div>
+			<div class="progress-wrap">
+				<span class="time-label">{{ fmtTime(currentTime) }}</span>
+				<div class="progress-bar" @click="handleProgressClick">
+					<div
+						class="progress-inner"
+						:style="{
+							width: duration ? `${(currentTime / duration) * 100}%` : '0%',
+						}"
+					></div>
+				</div>
+				<span class="time-label">{{ fmtTime(duration) }}</span>
+			</div>
+			<audio :src="audioUrl" v-if="audioUrl" class="audio-hidden" ref="audioRef"></audio>
 		</div>
 
 		<!-- 评论弹窗 Modal -->
@@ -69,44 +75,47 @@
 					</div>
 					<div class="comment-modal-body">
 						<div class="comment-song-info">
-							<img class="comment-song-cover" :src="songCover" alt="封面" />
+							<img :src="songCover" class="comment-song-cover" alt="封面" />
 							<div class="comment-song-detail">
-								<p class="comment-song-title">{{ songTitle }}</p>
-								<p class="comment-song-artist">{{ songArtist }}</p>
+								<div class="comment-song-title">{{ songTitle }}</div>
+								<div class="comment-song-artist">{{ songArtist }}</div>
 							</div>
 						</div>
 						<div class="comment-stat">
 							<span>共 {{ commentTotal }} 条评论</span>
 							<div class="sort-buttons">
-								<button class="sort-btn" :class="{ active: sortType === 'hot' }" @click="changeSortType('hot')">🔥 热度</button>
-								<button class="sort-btn" :class="{ active: sortType === 'time' }" @click="changeSortType('time')">🕒 时间</button>
+								<button class="sort-btn" :class="{ active: sortType === 'hot' }" @click="changeSortType('hot')">最热</button>
+								<button class="sort-btn" :class="{ active: sortType === 'time' }" @click="changeSortType('time')">最新</button>
 							</div>
 						</div>
-						<div class="comment-list" v-if="!commentLoading">
-							<div v-if="comments.length" class="comment-items">
-								<div v-for="(comment, idx) in comments" :key="idx" class="comment-item">
+						<div class="comment-list">
+							<div v-if="commentLoading" class="comment-loading">
+								<div class="loading-spinner"></div>
+								<span>加载评论中...</span>
+							</div>
+							<div v-else-if="comments.length === 0" class="empty-comment">暂无评论，快来抢沙发吧~</div>
+							<div v-else class="comment-items">
+								<div v-for="item in comments" :key="item.commentId" class="comment-item">
 									<div class="comment-avatar">
-										<img v-if="comment.user.avatarUrl" :src="comment.user.avatarUrl" alt="头像" />
-										<div v-else class="default-avatar">🎵</div>
+										<img v-if="item.user.avatarUrl" :src="item.user.avatarUrl" alt="头像" />
+										<span v-else class="default-avatar">🎵</span>
 									</div>
 									<div class="comment-content">
 										<div class="comment-user-info">
-											<span class="comment-nickname">{{ comment.user.nickname }}</span>
-											<span class="comment-time">{{ fmtCommentTime(comment.time) }}</span>
+											<span class="comment-nickname">{{ item.user.nickname }}</span>
+											<span class="comment-time">{{ fmtCommentTime(item.time) }}</span>
 										</div>
-										<p class="comment-text">{{ comment.content }}</p>
+										<div class="comment-text">{{ item.content }}</div>
 										<div class="comment-like">
-											<span class="like-icon">❤️</span>
-											<span>{{ comment.likedCount || 0 }}</span>
+											<span class="like-icon">👍</span>
+											<span>{{ item.likedCount || 0 }}</span>
 										</div>
 									</div>
 								</div>
-							</div>
-							<div v-else class="empty-comment">暂无评论，快来抢沙发吧~</div>
-							<div v-if="commentHasMore && !commentLoadingMore" class="load-more-btn" @click="loadMoreComments">加载更多评论</div>
-							<div v-if="commentLoadingMore" class="comment-loading" style="padding: 20px">
-								<div class="loading-spinner"></div>
-								<span>加载中...</span>
+								<div v-if="commentHasMore && !commentLoadingMore" class="load-more-btn" @click="loadMoreComments">加载更多评论</div>
+								<div v-if="commentLoadingMore" class="comment-loading" style="padding: 20px">
+									<div class="loading-spinner"></div>
+								</div>
 							</div>
 						</div>
 					</div>
@@ -124,34 +133,44 @@ import { useRoute, useRouter } from "vue-router";
 const route = useRoute();
 const router = useRouter();
 
-// 歌曲id 和 歌单id
+// 路由参数
 const songId = computed(() => route.query.id);
 const playlistId = computed(() => route.query.playlistId);
+const singerId = computed(() => route.query.singerId);
+const source = computed(() => route.query.source); // 'playlist' 或 'singer'
 
-// 歌曲信息
+// 播放列表相关
+const playlistTracks = ref([]); // [{ id, name, artist, album, duration }]
+const currentTrackIndex = ref(-1); // 原始列表中的索引
+
+// 播放模式: 'list'（列表循环）, 'random'（随机播放）, 'loop'（单曲循环）
+const playMode = ref("list");
+const playModeIcon = computed(() => {
+	if (playMode.value === "list") return "🔁";
+	if (playMode.value === "random") return "🔀";
+	return "🔂";
+});
+const playModeTitle = computed(() => {
+	if (playMode.value === "list") return "列表循环";
+	if (playMode.value === "random") return "随机播放";
+	return "单曲循环";
+});
+
+// 随机播放相关
+const randomIndices = ref([]);
+const randomIndex = ref(-1);
+
+// 其他状态
 const songTitle = ref("正在播放的歌曲");
 const songArtist = ref("未知艺术家");
 const songAlbum = ref("未知专辑");
 const songCover = ref("https://via.placeholder.com/260x260.png?text=Cover");
-
-// 歌词
 const lyrics = ref([]);
-
-// 播放相关
 const audioUrl = ref("");
 const currentTime = ref(0);
 const duration = ref(0);
 const isPlaying = ref(false);
 const audioRef = ref(null);
-
-// 单曲循环
-const isLoop = ref(false);
-
-// 歌单相关
-const playlistTracks = ref([]); // 歌单歌曲列表 [{ id, name, artist, album, duration }]
-const currentTrackIndex = ref(-1); // 当前歌曲在歌单中的索引
-
-// 自动播放标志（切歌后保持播放状态）
 const autoPlayNext = ref(false);
 
 // 评论相关
@@ -162,15 +181,18 @@ const commentTotal = ref(0);
 const commentPage = ref(1);
 const commentHasMore = ref(true);
 const commentLoadingMore = ref(false);
-const sortType = ref("hot"); // 'hot' 或 'time'
+const sortType = ref("hot");
 
-// 存储事件处理器，用于清理
+// 事件处理器
 let playHandler = null;
 let pauseHandler = null;
 let endedHandler = null;
 let timeUpdateHandler = null;
 let loadedMetadataHandler = null;
 let canPlayHandler = null;
+
+// 歌词滚动相关
+const lyricsContentRef = ref(null);
 
 // 高亮歌词索引
 const highlightIndex = computed(() => {
@@ -184,94 +206,89 @@ const highlightIndex = computed(() => {
 	return index;
 });
 
+// 滚动到当前高亮的歌词行
+const scrollToHighlightLyric = () => {
+	if (!lyricsContentRef.value) return;
+	const container = lyricsContentRef.value;
+	const highlightLine = container.querySelector(".lyrics-line--highlight");
+	if (highlightLine) {
+		highlightLine.scrollIntoView({ behavior: "smooth", block: "center" });
+	}
+};
+
+// 监听高亮索引变化，自动滚动
+watch(highlightIndex, () => {
+	nextTick(() => scrollToHighlightLyric());
+});
+
+// 歌词列表首次加载完成后也滚动一次
+watch(
+	lyrics,
+	() => {
+		nextTick(() => scrollToHighlightLyric());
+	},
+	{ immediate: true },
+);
+
 // 是否可以切换上一首/下一首
-const canSwitchPrev = computed(() => playlistTracks.value.length > 1 && currentTrackIndex.value > 0);
-const canSwitchNext = computed(() => playlistTracks.value.length > 1 && currentTrackIndex.value < playlistTracks.value.length - 1);
+const canSwitchPrev = computed(() => playlistTracks.value.length > 1);
+const canSwitchNext = computed(() => playlistTracks.value.length > 1);
 
-// 歌词自动滚动
-watch(highlightIndex, newIndex => {
-	if (newIndex >= 0) {
-		nextTick(() => {
-			const lines = document.querySelectorAll(".lyrics-line");
-			if (lines[newIndex]) {
-				lines[newIndex].scrollIntoView({ behavior: "smooth", block: "center" });
-			}
-		});
-	}
-});
-
-// 监听歌单ID变化，重新获取歌单详情
-watch(playlistId, async () => {
-	await fetchPlaylistDetail();
-	// 歌单更新后，同步当前歌曲索引
-	updateCurrentTrackIndex();
-});
-
-// 监听歌曲ID变化，加载歌曲资源
-watch(songId, async (newId, oldId) => {
-	if (!newId) return;
-	// 重置音频URL，避免旧音频残留
-	audioUrl.value = "";
-	// 重新加载歌曲详情、歌词、播放地址
-	await Promise.all([fetchSongDetail(), fetchLyrics(), fetchSongUrl()]);
-	// 更新当前歌曲索引
-	updateCurrentTrackIndex();
-	// 如果有自动播放标志，尝试播放
-	if (autoPlayNext.value) {
-		nextTick(() => {
-			const audio = audioRef.value;
-			if (audio && audioUrl.value) {
-				audio.play().catch(err => console.warn("自动播放失败:", err));
-			}
-			autoPlayNext.value = false;
-		});
-	}
-});
-
-// 监听audioUrl变化，重新绑定事件（因为v-if会重建audio元素）
-watch(audioUrl, () => {
-	nextTick(() => {
-		bindAudioEvents();
-	});
-});
-
-// 监听循环模式变化，同步到audio元素
-watch(isLoop, newVal => {
-	if (audioRef.value) {
-		audioRef.value.loop = newVal;
-	}
-});
-
-// 控制body滚动（弹窗时禁止滚动）
-watch(isCommentModalVisible, newVal => {
-	document.body.style.overflow = newVal ? "hidden" : "";
-});
-
-// ---------- 歌单相关 ----------
+// ------------------- 播放列表获取 -------------------
 const fetchPlaylistDetail = async () => {
 	const id = playlistId.value;
-	if (!id) return;
+	if (!id) return [];
 	try {
 		const res = await api.get("/playlist/detail", { id });
 		const detail = res.playlist;
 		if (detail && detail.tracks) {
-			playlistTracks.value = detail.tracks.map(item => ({
+			return detail.tracks.map(item => ({
 				id: item.id,
 				name: item.name,
 				artist: item.ar.map(artist => artist.name).join(", "),
 				album: item.al?.name || "未知专辑",
 				duration: item.dt || 0,
 			}));
-		} else {
-			playlistTracks.value = [];
 		}
+		return [];
 	} catch (error) {
 		console.error("获取歌单详情失败:", error);
-		playlistTracks.value = [];
+		return [];
 	}
 };
 
-// 根据当前songId更新索引
+const fetchSingerHotSongs = async () => {
+	const id = singerId.value;
+	if (!id) return [];
+	try {
+		const res = await api.get("/artists", { id });
+		const data = res?.data || res;
+		if (data.code !== 200) return [];
+		const hotSongs = data.hotSongs || [];
+		return hotSongs.map((song, idx) => ({
+			id: song.id,
+			name: song.name || "未知歌曲",
+			artist: (song.ar || song.artists || []).map(a => a.name).join(", ") || "未知艺术家",
+			album: song.al?.name || "未知专辑",
+			duration: song.dt || song.duration || 0,
+		}));
+	} catch (error) {
+		console.error("获取歌手热门歌曲失败:", error);
+		return [];
+	}
+};
+
+const loadPlaylist = async () => {
+	let tracks = [];
+	if (source.value === "singer" && singerId.value) {
+		tracks = await fetchSingerHotSongs();
+	} else if (playlistId.value) {
+		tracks = await fetchPlaylistDetail();
+	}
+	playlistTracks.value = tracks;
+	resetRandomMode();
+};
+
 const updateCurrentTrackIndex = () => {
 	const id = songId.value;
 	if (!id || !playlistTracks.value.length) {
@@ -280,38 +297,118 @@ const updateCurrentTrackIndex = () => {
 	}
 	const index = playlistTracks.value.findIndex(track => track.id == id);
 	currentTrackIndex.value = index !== -1 ? index : -1;
+	if (playMode.value === "random" && randomIndices.value.length) {
+		const pos = randomIndices.value.findIndex(idx => idx === currentTrackIndex.value);
+		randomIndex.value = pos !== -1 ? pos : 0;
+	}
 };
 
-// 切歌逻辑（delta: 1下一首，-1上一首）
-const switchTrack = delta => {
-	if (!playlistTracks.value.length) return;
-	let newIndex = currentTrackIndex.value + delta;
-	// 列表循环：边界处理
-	if (newIndex < 0) newIndex = playlistTracks.value.length - 1;
-	if (newIndex >= playlistTracks.value.length) newIndex = 0;
-	if (newIndex === currentTrackIndex.value) return; // 无效切换
+// ------------------- 随机播放辅助 -------------------
+const generateRandomIndices = () => {
+	const len = playlistTracks.value.length;
+	if (len === 0) return [];
+	const indices = Array.from({ length: len }, (_, i) => i);
+	const currentIdx = currentTrackIndex.value;
+	const others = indices.filter(i => i !== currentIdx);
+	for (let i = others.length - 1; i > 0; i--) {
+		const j = Math.floor(Math.random() * (i + 1));
+		[others[i], others[j]] = [others[j], others[i]];
+	}
+	return [currentIdx, ...others];
+};
 
-	const newSongId = playlistTracks.value[newIndex].id;
-	if (!newSongId) return;
+const resetRandomMode = () => {
+	if (playMode.value === "random" && playlistTracks.value.length > 1) {
+		randomIndices.value = generateRandomIndices();
+		randomIndex.value = 0;
+	} else {
+		randomIndices.value = [];
+		randomIndex.value = -1;
+	}
+};
 
-	// 记录切换前的播放状态，用于新歌自动播放
+// 切换播放模式
+const togglePlayMode = () => {
+	if (playMode.value === "list") playMode.value = "random";
+	else if (playMode.value === "random") playMode.value = "loop";
+	else playMode.value = "list";
+
+	if (audioRef.value) {
+		audioRef.value.loop = playMode.value === "loop";
+	}
+	if (playMode.value === "random") {
+		resetRandomMode();
+	} else {
+		randomIndices.value = [];
+		randomIndex.value = -1;
+	}
+};
+
+// ------------------- 切歌逻辑 -------------------
+const getNextTrackId = () => {
+	if (!playlistTracks.value.length) return null;
+	if (playMode.value === "random" && randomIndices.value.length) {
+		let nextPos = randomIndex.value + 1;
+		if (nextPos >= randomIndices.value.length) nextPos = 0;
+		const nextIdx = randomIndices.value[nextPos];
+		return playlistTracks.value[nextIdx]?.id;
+	} else {
+		let nextIdx = currentTrackIndex.value + 1;
+		if (nextIdx >= playlistTracks.value.length) nextIdx = 0;
+		return playlistTracks.value[nextIdx]?.id;
+	}
+};
+
+const getPrevTrackId = () => {
+	if (!playlistTracks.value.length) return null;
+	if (playMode.value === "random" && randomIndices.value.length) {
+		let prevPos = randomIndex.value - 1;
+		if (prevPos < 0) prevPos = randomIndices.value.length - 1;
+		const prevIdx = randomIndices.value[prevPos];
+		return playlistTracks.value[prevIdx]?.id;
+	} else {
+		let prevIdx = currentTrackIndex.value - 1;
+		if (prevIdx < 0) prevIdx = playlistTracks.value.length - 1;
+		return playlistTracks.value[prevIdx]?.id;
+	}
+};
+
+// 切换歌曲（新增 forceAutoPlay 参数）
+const switchToSongId = async (newId, forceAutoPlay = false) => {
+	if (!newId) return;
 	const audio = audioRef.value;
-	autoPlayNext.value = audio ? !audio.paused : true; // 如果当前正在播放则自动播放下首
+	if (forceAutoPlay) {
+		// 自动切歌（如自然播放结束）强制自动播放
+		autoPlayNext.value = true;
+	} else {
+		// 手动切歌：根据当前音频是否在播放来决定
+		autoPlayNext.value = audio ? !audio.paused : true;
+	}
 
-	// 更新路由，触发watch(songId)重新加载
-	router.replace({
-		name: "player",
-		query: {
-			id: newSongId,
-			playlistId: playlistId.value,
-		},
-	});
+	const query = {
+		id: newId,
+	};
+	if (playlistId.value) query.playlistId = playlistId.value;
+	if (singerId.value) {
+		query.singerId = singerId.value;
+		query.source = "singer";
+	}
+	router.replace({ name: "player", query });
 };
 
-const nextTrack = () => switchTrack(1);
-const prevTrack = () => switchTrack(-1);
+const nextTrack = () => {
+	if (!playlistTracks.value.length) return;
+	const nextId = getNextTrackId();
+	switchToSongId(nextId, false); // 手动切歌，不强制播放
+};
 
-// ---------- 歌曲资源 ----------
+const prevTrack = () => {
+	if (!playlistTracks.value.length) return;
+	const prevId = getPrevTrackId();
+	switchToSongId(prevId, false);
+};
+
+// ------------------- 歌曲资源获取 -------------------
 const fetchSongDetail = async () => {
 	try {
 		const id = songId.value;
@@ -387,7 +484,7 @@ const fetchSongUrl = async () => {
 	}
 };
 
-// ---------- 播放控制 ----------
+// ------------------- 播放控制 -------------------
 const handleTogglePlay = () => {
 	const audio = audioRef.value;
 	if (!audio || !audioUrl.value) return;
@@ -407,16 +504,10 @@ const handleProgressClick = e => {
 	audio.currentTime = ratio * duration.value;
 };
 
-const toggleLoop = () => {
-	isLoop.value = !isLoop.value;
-};
-
-// 音频事件绑定（确保播放状态同步 + 自动下一首）
 const bindAudioEvents = () => {
 	const audio = audioRef.value;
 	if (!audio) return;
 
-	// 移除旧监听
 	if (playHandler) audio.removeEventListener("play", playHandler);
 	if (pauseHandler) audio.removeEventListener("pause", pauseHandler);
 	if (endedHandler) audio.removeEventListener("ended", endedHandler);
@@ -424,7 +515,6 @@ const bindAudioEvents = () => {
 	if (loadedMetadataHandler) audio.removeEventListener("loadedmetadata", loadedMetadataHandler);
 	if (canPlayHandler) audio.removeEventListener("canplay", canPlayHandler);
 
-	// 定义新处理函数
 	playHandler = () => {
 		isPlaying.value = true;
 	};
@@ -432,11 +522,10 @@ const bindAudioEvents = () => {
 		isPlaying.value = false;
 	};
 	endedHandler = () => {
-		// 非单曲循环模式：自动下一首
-		if (!isLoop.value) {
-			// 自动切歌时也要自动播放下一首
-			autoPlayNext.value = true;
-			nextTrack();
+		if (playMode.value === "loop") return;
+		const nextId = getNextTrackId();
+		if (nextId) {
+			switchToSongId(nextId, true); // 自然播放结束，强制自动播放
 		}
 	};
 	timeUpdateHandler = () => {
@@ -450,14 +539,12 @@ const bindAudioEvents = () => {
 		currentTime.value = audio.currentTime || 0;
 	};
 	canPlayHandler = () => {
-		// 音频准备好后，如果存在自动播放标志，则播放
 		if (autoPlayNext.value) {
 			audio.play().catch(err => console.warn("自动播放失败:", err));
 			autoPlayNext.value = false;
 		}
 	};
 
-	// 添加新监听
 	audio.addEventListener("play", playHandler);
 	audio.addEventListener("pause", pauseHandler);
 	audio.addEventListener("ended", endedHandler);
@@ -465,85 +552,7 @@ const bindAudioEvents = () => {
 	audio.addEventListener("loadedmetadata", loadedMetadataHandler);
 	audio.addEventListener("canplay", canPlayHandler);
 
-	// 同步loop属性
-	audio.loop = isLoop.value;
-};
-
-// ---------- 评论相关 ----------
-const fetchComments = async (reset = true) => {
-	const id = songId.value;
-	if (!id) return;
-	if (reset) {
-		commentPage.value = 1;
-		comments.value = [];
-		commentHasMore.value = true;
-		commentLoading.value = true;
-	} else {
-		if (!commentHasMore.value || commentLoadingMore.value) return;
-		commentLoadingMore.value = true;
-	}
-	try {
-		const limit = 30;
-		const offset = (commentPage.value - 1) * limit;
-		const res = await api.get("/comment/music", { id, limit, offset });
-		if (res.code === 200) {
-			const newComments = res.comments || [];
-			if (reset) {
-				comments.value = newComments;
-			} else {
-				comments.value = [...comments.value, ...newComments];
-			}
-			commentTotal.value = res.total || 0;
-			commentHasMore.value = comments.value.length < commentTotal.value;
-			applySort();
-		} else {
-			if (reset) comments.value = [];
-			commentHasMore.value = false;
-		}
-	} catch (error) {
-		console.error("获取评论失败:", error);
-		if (reset) comments.value = [];
-		commentHasMore.value = false;
-	} finally {
-		if (reset) {
-			commentLoading.value = false;
-		} else {
-			commentLoadingMore.value = false;
-		}
-	}
-};
-
-const loadMoreComments = () => {
-	if (!commentHasMore.value || commentLoadingMore.value || commentLoading.value) return;
-	commentPage.value++;
-	fetchComments(false);
-};
-
-const openCommentModal = () => {
-	if (!songId.value) return;
-	isCommentModalVisible.value = true;
-	fetchComments(true);
-};
-
-const closeCommentModal = () => {
-	isCommentModalVisible.value = false;
-};
-
-const stopPropagation = e => e.stopPropagation();
-
-const applySort = () => {
-	if (!comments.value.length) return;
-	if (sortType.value === "hot") {
-		comments.value.sort((a, b) => (b.likedCount || 0) - (a.likedCount || 0));
-	} else if (sortType.value === "time") {
-		comments.value.sort((a, b) => (b.time || 0) - (a.time || 0));
-	}
-};
-
-const changeSortType = type => {
-	if (sortType.value === type) return;
-	sortType.value = type;
-	applySort();
+	audio.loop = playMode.value === "loop";
 };
 
 // 工具函数
@@ -555,20 +564,115 @@ const fmtTime = seconds => {
 	return `${m.toString().padStart(2, "0")}:${rs.toString().padStart(2, "0")}`;
 };
 
+// ------------------- 评论功能 -------------------
 const fmtCommentTime = timestamp => {
 	if (!timestamp) return "未知时间";
 	const date = new Date(timestamp);
 	return `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, "0")}-${date.getDate().toString().padStart(2, "0")}`;
 };
 
+const fetchComments = async (reset = true) => {
+	if (!songId.value) return;
+	if (reset) {
+		commentPage.value = 1;
+		commentHasMore.value = true;
+		commentLoading.value = true;
+	}
+	try {
+		const limit = 20;
+		const offset = (commentPage.value - 1) * limit;
+		const res = await api.get("/comment/music", {
+			id: songId.value,
+			limit,
+			offset,
+			sortType: sortType.value,
+		});
+		const data = res.data || res;
+		const newComments = data.comments || [];
+		if (reset) {
+			comments.value = newComments;
+		} else {
+			comments.value.push(...newComments);
+		}
+		commentTotal.value = data.total || 0;
+		commentHasMore.value = newComments.length === limit && comments.value.length < commentTotal.value;
+	} catch (error) {
+		console.error("获取评论失败:", error);
+		if (reset) comments.value = [];
+	} finally {
+		if (reset) commentLoading.value = false;
+		commentLoadingMore.value = false;
+	}
+};
+
+const loadMoreComments = async () => {
+	if (!commentHasMore.value || commentLoadingMore.value) return;
+	commentLoadingMore.value = true;
+	commentPage.value++;
+	await fetchComments(false);
+};
+
+const openCommentModal = () => {
+	isCommentModalVisible.value = true;
+	if (comments.value.length === 0 && !commentLoading.value) {
+		fetchComments(true);
+	}
+};
+
+const closeCommentModal = () => {
+	isCommentModalVisible.value = false;
+};
+
+const stopPropagation = e => e.stopPropagation();
+
+const changeSortType = type => {
+	if (sortType.value === type) return;
+	sortType.value = type;
+	fetchComments(true);
+};
+
+// 监听路由变化
+watch([source, playlistId, singerId], async () => {
+	await loadPlaylist();
+	updateCurrentTrackIndex();
+});
+
+watch(songId, async () => {
+	if (!songId.value) return;
+	audioUrl.value = "";
+	await Promise.all([fetchSongDetail(), fetchLyrics(), fetchSongUrl()]);
+	updateCurrentTrackIndex();
+	if (autoPlayNext.value) {
+		nextTick(() => {
+			const audio = audioRef.value;
+			if (audio && audioUrl.value) {
+				audio.play().catch(err => console.warn("自动播放失败:", err));
+			}
+			autoPlayNext.value = false;
+		});
+	}
+});
+
+watch(audioUrl, () => {
+	nextTick(() => bindAudioEvents());
+});
+
+watch(playMode, () => {
+	if (audioRef.value) audioRef.value.loop = playMode.value === "loop";
+	if (playMode.value === "random") resetRandomMode();
+	else randomIndices.value = [];
+});
+
+watch(isCommentModalVisible, newVal => {
+	document.body.style.overflow = newVal ? "hidden" : "";
+});
+
 // 生命周期
 onMounted(async () => {
-	await fetchPlaylistDetail();
+	await loadPlaylist();
 	updateCurrentTrackIndex();
 	await Promise.all([fetchSongDetail(), fetchLyrics(), fetchSongUrl()]);
-	nextTick(() => {
-		bindAudioEvents();
-	});
+	nextTick(() => bindAudioEvents());
 });
 
 onBeforeUnmount(() => {
@@ -591,28 +695,26 @@ onBeforeUnmount(() => {
 	background: radial-gradient(circle at top left, #2b2b2b, #000);
 	color: #f5f5f5;
 	display: flex;
-	justify-content: center;
-	padding: 40px 0;
+	flex-direction: column;
+	padding: 40px 0 0;
 	box-sizing: border-box;
 }
 
 .player-inner {
 	width: 100%;
 	max-width: 1200px;
-	display: flex;
-	flex-direction: column;
-	justify-content: space-between;
-	gap: 32px;
+	margin: 0 auto;
+	flex: 1;
 }
 
 .player-main {
-	width: 100%;
 	display: flex;
 	gap: 32px;
+	flex-wrap: wrap;
 }
 
 .player-left {
-	width: 320px;
+	flex: 0 0 320px;
 	display: flex;
 	flex-direction: column;
 	align-items: center;
@@ -669,9 +771,7 @@ onBeforeUnmount(() => {
 
 .player-right {
 	flex: 1;
-	display: flex;
-	flex-direction: column;
-	justify-content: center;
+	min-width: 260px;
 }
 
 .lyrics-card {
@@ -757,7 +857,9 @@ onBeforeUnmount(() => {
 
 .player-controls {
 	width: 100%;
-	padding: 16px 24px 0;
+	max-width: 1200px;
+	margin: 0 auto;
+	padding: 16px 24px 32px;
 	box-sizing: border-box;
 	display: flex;
 	flex-direction: column;
@@ -1142,17 +1244,13 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 960px) {
-	.player-inner {
-		flex-direction: column;
-	}
-
 	.player-main {
 		flex-direction: column;
 		align-items: center;
 	}
 
 	.player-left {
-		width: auto;
+		flex: 0 0 auto;
 	}
 
 	.comment-modal-container {

@@ -1,3 +1,4 @@
+// MusicList.vue
 <script setup>
 import { ref, onMounted, computed } from "vue";
 import api from "@/api";
@@ -9,9 +10,7 @@ const router = useRouter();
 const playlistId = computed(() => route.query.id);
 
 const playlistName = ref("");
-
 const tracks = ref([]);
-
 const loading = ref(false);
 
 const fetchPlaylistDetails = async () => {
@@ -51,14 +50,14 @@ const fmtduration = ms => {
 	return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
 };
 
-// 跳转到播放页面 并传递歌曲id
+// 跳转到播放页面 并传递歌曲id + 歌单id
 const handlePlaySong = id => {
 	if (!id) return;
-	router.push({ name: "player", query: { id } });
+	router.push({ name: "player", query: { id, playlistId: playlistId.value } });
 };
+
 onMounted(() => {
 	console.log("当前歌单ID:", playlistId.value);
-	// 这里可以根据 playlistId.value 发起请求获取歌单详情数据
 	fetchPlaylistDetails();
 });
 </script>

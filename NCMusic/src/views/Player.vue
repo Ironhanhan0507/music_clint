@@ -1,398 +1,8 @@
-<script setup>
-import { ref, onMounted, computed, watch, nextTick, onBeforeUnmount } from "vue";
-import api from "@/api";
-import { useRoute } from "vue-router";
-
-const route = useRoute();
-// 得到当前歌曲id
-const songId = computed(() => route.query.id);
-// 歌曲信息
-const songTitle = ref("正在播放的歌曲");
-const songArtist = ref("未知艺术家");
-const songAlbum = ref("未知专辑");
-const songCover = ref("https://via.placeholder.com/260x260.png?text=Cover");
-
-// 歌词存储为对象数组，每个对象包含时间和文本
-const lyrics = ref([]);
-
-// 音乐播放地址
-const audioUrl = ref("");
-const currentTime = ref(0);
-const duration = ref(0);
-const isPlaying = ref(false);
-
-// 获取audio标签
-const audioRef = ref(null);
-
-// 评论相关状态
-const isCommentModalVisible = ref(false);
-const comments = ref([]);
-const commentLoading = ref(false);
-const commentTotal = ref(0);
-
-const commentPage = ref(1); // 当前页码
-const commentHasMore = ref(true); // 是否还有更多评论
-const commentLoadingMore = ref(false); // 是否正在加载更多
-
-// 当前高亮的歌词索引
-const highlightIndex = computed(() => {
-	if (!lyrics.value.length) return -1;
-	const time = currentTime.value;
-	let index = -1;
-	for (let i = 0; i < lyrics.value.length; i++) {
-		if (lyrics.value[i].time <= time) {
-			index = i;
-		} else {
-			break; // 因为歌词是按时间排序的，一旦超过就可以退出
-		}
-	}
-	return index;
-});
-
-// 监听高亮索引变化，自动滚动到对应歌词
-watch(highlightIndex, newIndex => {
-	if (newIndex >= 0) {
-		nextTick(() => {
-			const lyricsLines = document.querySelectorAll(".lyrics-line");
-			if (lyricsLines[newIndex]) {
-				lyricsLines[newIndex].scrollIntoView({
-					behavior: "smooth",
-					block: "center",
-				});
-			}
-		});
-	}
-});
-
-// 监听歌曲ID变化，重新加载数据，并关闭评论弹窗
-watch(songId, () => {
-	// 重置播放状态
-	if (audioRef.value) {
-		audioRef.value.pause();
-		isPlaying.value = false;
-		currentTime.value = 0;
-		duration.value = 0;
-	}
-	// 切换歌曲时关闭评论弹窗并清空评论
-	if (isCommentModalVisible.value) {
-		isCommentModalVisible.value = false;
-	}
-	comments.value = [];
-	commentTotal.value = 0;
-	loadSongData();
-});
-
-// 控制body滚动，防止弹窗打开时背景滚动
-watch(isCommentModalVisible, newVal => {
-	if (newVal) {
-		document.body.style.overflow = "hidden";
-	} else {
-		document.body.style.overflow = "";
-	}
-});
-
-// 加载歌曲元数据
-const handleLoadedMetadata = () => {
-	const audio = audioRef.value;
-	if (!audio) return;
-	duration.value = audio.duration || 0;
-	currentTime.value = audio.currentTime || 0;
-};
-
-// 格式化时间
-const fmtTime = seconds => {
-	if (!seconds || !Number.isFinite(seconds)) return "00:00";
-	const s = Math.floor(seconds);
-	const m = Math.floor(seconds / 60);
-	const rs = s % 60;
-	const mm = m.toString().padStart(2, "0");
-	const ss = rs.toString().padStart(2, "0");
-	return `${mm}:${ss}`;
-};
-
-// 格式化评论时间
-const fmtCommentTime = timestamp => {
-	if (!timestamp) return "未知时间";
-	const date = new Date(timestamp);
-	const year = date.getFullYear();
-	const month = (date.getMonth() + 1).toString().padStart(2, "0");
-	const day = date.getDate().toString().padStart(2, "0");
-	return `${year}-${month}-${day}`;
-};
-
-// 获取歌曲详情
-const fetchSongDetail = async () => {
-	try {
-		const id = songId.value;
-		if (!id) return;
-		const res = await api.get("/song/detail", { ids: id });
-		console.log("歌曲详情数据:", res);
-		const detail = res.songs?.[0];
-		console.log(detail);
-		if (detail) {
-			songTitle.value = detail.name || "未知歌曲";
-			songArtist.value = detail.ar.map(artist => artist.name).join(", ") || "未知艺术家";
-			songAlbum.value = detail.al?.name || "未知专辑";
-			songCover.value = detail.al?.picUrl || "https://via.placeholder.com/260x260.png?text=Cover+Unavailable";
-		}
-	} catch (error) {
-		console.error("Failed to fetch song details获取歌曲详情失败:", error);
-	}
-};
-
-// 获取歌词
-const fetchLyrics = async () => {
-	try {
-		const id = songId.value;
-		if (!id) return;
-		const res = await api.get("/lyric", { id });
-		console.log("歌词数据:", res);
-		const raw = res.lrc?.lyric || "";
-		// 解析获取到的歌词数据
-		const parsedLyrics = parseLyric(raw);
-		lyrics.value = parsedLyrics;
-		console.log("解析后的歌词:", parsedLyrics);
-	} catch (error) {
-		console.error("Failed to fetch lyrics获取歌词失败:", error);
-		lyrics.value = [];
-	}
-};
-
-// 解析歌词（带时间戳）
-const parseLyric = raw => {
-	if (!raw) return [];
-
-	const lines = raw.split("\n"); // 按行分割
-	const lyricItems = [];
-
-	for (const line of lines) {
-		const trimmedLine = line.trim();
-		if (!trimmedLine) continue;
-
-		// 正则匹配时间标签，格式如 [00:12.34] 或 [01:23]
-		const timeRegex = /\[(\d{2}):(\d{2})(?:\.(\d{2,3}))?\]/g;
-		let match;
-		let firstTime = null;
-		let text = trimmedLine;
-
-		// 收集所有匹配到的时间标签
-		const times = [];
-		while ((match = timeRegex.exec(trimmedLine)) !== null) {
-			const minutes = parseInt(match[1], 10);
-			const seconds = parseInt(match[2], 10);
-			let milliseconds = 0;
-			if (match[3]) {
-				// 处理毫秒，可能是2位或3位
-				milliseconds = parseInt(match[3].padEnd(3, "0"), 10);
-			}
-			const totalSeconds = minutes * 60 + seconds + milliseconds / 1000;
-			times.push(totalSeconds);
-		}
-
-		if (times.length > 0) {
-			firstTime = times[0]; // 取第一个时间标签
-			// 移除所有时间标签
-			text = trimmedLine.replace(/\[[^\]]*\]/g, "").trim();
-		}
-
-		// 只有有时间标签且文本不为空的才加入
-		if (firstTime !== null && text) {
-			lyricItems.push({
-				time: firstTime,
-				text: text,
-			});
-		}
-	}
-
-	// 按时间排序
-	lyricItems.sort((a, b) => a.time - b.time);
-
-	return lyricItems;
-};
-
-// 获取播放地址
-const fetchSongUrl = async () => {
-	try {
-		const id = songId.value;
-		if (!id) return;
-		const res = await api.get("/song/url", { id });
-		const item = res.data?.[0];
-		audioUrl.value = item?.url || "";
-		currentTime.value = 0;
-		duration.value = 0;
-		isPlaying.value = false;
-	} catch (error) {
-		console.error("Failed to fetch song URL获取歌曲播放地址失败:", error);
-	}
-};
-
-// 加载所有歌曲数据
-const loadSongData = async () => {
-	await Promise.all([fetchSongDetail(), fetchLyrics(), fetchSongUrl()]);
-};
-
-// 播放事件
-const handleTogglePlay = () => {
-	const audio = audioRef.value;
-	if (!audio || !audioUrl.value) return;
-	if (audio.paused) {
-		audio
-			.play()
-			.then(() => {
-				isPlaying.value = true;
-			})
-			.catch(error => {
-				console.error("Failed to play audio播放失败:", error);
-			});
-	} else {
-		audio.pause();
-		isPlaying.value = false;
-	}
-};
-
-// 播放结束暂停
-const handleAudioEnded = () => {
-	isPlaying.value = false;
-};
-
-// 播放时间更新
-const handleTimeUpdate = () => {
-	const audio = audioRef.value;
-	if (!audio) return;
-	currentTime.value = audio.currentTime || 0;
-	if (audio.duration) {
-		duration.value = audio.duration;
-	}
-};
-
-// 点击进度条
-const handleProgressClick = e => {
-	const bar = e.currentTarget;
-	const rect = bar.getBoundingClientRect();
-	const ratio = (e.clientX - rect.left) / rect.width;
-	const audio = audioRef.value;
-	const newTime = ratio * duration.value;
-	if (!audio) return;
-	audio.currentTime = newTime;
-	currentTime.value = newTime;
-};
-
-// 获取评论（支持分页）
-// reset = true 表示重新加载第一页（清空已有评论）
-const fetchComments = async (reset = true) => {
-	const id = songId.value;
-	if (!id) {
-		console.warn("无法获取评论: 缺少歌曲ID");
-		return;
-	}
-
-	if (reset) {
-		// 重置分页状态
-		commentPage.value = 1;
-		comments.value = [];
-		commentHasMore.value = true;
-		commentLoading.value = true; // 全屏加载状态
-	} else {
-		if (!commentHasMore.value || commentLoadingMore.value) return;
-		commentLoadingMore.value = true;
-	}
-
-	try {
-		const limit = 30; // 每页条数
-		const offset = (commentPage.value - 1) * limit;
-		const res = await api.get("/comment/music", {
-			id,
-			limit,
-			offset,
-		});
-
-		if (res.code === 200) {
-			const newComments = res.comments || [];
-			if (reset) {
-				comments.value = newComments;
-			} else {
-				comments.value = [...comments.value, ...newComments];
-			}
-			commentTotal.value = res.total || 0;
-			// 判断是否还有更多
-			commentHasMore.value = comments.value.length < commentTotal.value;
-			// 如果当前有排序规则，重新排序（可选）
-			applySort();
-		} else {
-			if (reset) comments.value = [];
-			commentHasMore.value = false;
-		}
-	} catch (error) {
-		console.error("获取评论失败:", error);
-		if (reset) comments.value = [];
-		commentHasMore.value = false;
-	} finally {
-		if (reset) {
-			commentLoading.value = false;
-		} else {
-			commentLoadingMore.value = false;
-		}
-	}
-};
-
-const loadMoreComments = () => {
-	if (!commentHasMore.value || commentLoadingMore.value || commentLoading.value) return;
-	commentPage.value++;
-	fetchComments(false);
-};
-// 打开评论弹窗
-const openCommentModal = () => {
-	if (!songId.value) return;
-	isCommentModalVisible.value = true;
-	fetchComments(true); // 重置并加载第一页
-};
-
-// 关闭评论弹窗
-const closeCommentModal = () => {
-	isCommentModalVisible.value = false;
-};
-
-// 阻止弹窗内容区域的点击事件冒泡，防止点击内容区域关闭弹窗
-const stopPropagation = e => {
-	e.stopPropagation();
-};
-
-// 排序相关
-const sortType = ref("hot"); // 'hot' 热度排序，'time' 时间排序
-
-// 对评论进行排序（原地排序）
-const applySort = () => {
-	if (!comments.value.length) return;
-	if (sortType.value === "hot") {
-		comments.value.sort((a, b) => (b.likedCount || 0) - (a.likedCount || 0));
-	} else if (sortType.value === "time") {
-		comments.value.sort((a, b) => (b.time || 0) - (a.time || 0));
-	}
-};
-
-// 切换排序方式
-const changeSortType = type => {
-	if (sortType.value === type) return;
-	sortType.value = type;
-	applySort();
-};
-
-onMounted(() => {
-	console.log("当前歌曲ID:", songId.value);
-	loadSongData();
-});
-
-onBeforeUnmount(() => {
-	// 组件卸载前恢复body滚动
-	document.body.style.overflow = "";
-});
-</script>
-
 <template>
 	<div class="player-page">
 		<div class="player-inner">
 			<div class="player-main">
-				<!-- 左侧，封面与基本信息 -->
+				<!-- 左侧封面与基本信息 -->
 				<div class="player-left">
 					<div class="cover-wrapr">
 						<div class="cover-disc">
@@ -405,7 +15,7 @@ onBeforeUnmount(() => {
 						<p class="song-album">{{ songAlbum }}</p>
 					</div>
 				</div>
-				<!-- 右侧歌词信息 -->
+				<!-- 右侧歌词 -->
 				<div class="player-right">
 					<div class="lyrics-card">
 						<div class="lyrics-header">
@@ -423,10 +33,16 @@ onBeforeUnmount(() => {
 					</div>
 				</div>
 			</div>
+
 			<!-- 底部控制区 -->
 			<div class="player-controls">
 				<div class="controls-main">
-					<button class="btn-circle btn-large" @click="handleTogglePlay">{{ isPlaying ? "⏸" : "▶" }}</button>
+					<button class="btn-circle btn-small" @click="toggleLoop" :title="isLoop ? '关闭单曲循环' : '开启单曲循环'">
+						{{ isLoop ? "🔂" : "🔁" }}
+					</button>
+					<button class="btn-circle btn-large" @click="handleTogglePlay">
+						{{ isPlaying ? "⏸" : "▶" }}
+					</button>
 				</div>
 				<div class="progress-wrap">
 					<span class="time-label">{{ fmtTime(currentTime) }}</span>
@@ -435,7 +51,7 @@ onBeforeUnmount(() => {
 					</div>
 					<span class="time-label">{{ fmtTime(duration) }}</span>
 				</div>
-				<audio :src="audioUrl" v-if="audioUrl" class="audio-hidden" ref="audioRef" @loadedmetadata="handleLoadedMetadata" @timeupdate="handleTimeUpdate" @ended="handleAudioEnded"></audio>
+				<audio :src="audioUrl" v-if="audioUrl" class="audio-hidden" ref="audioRef"></audio>
 			</div>
 		</div>
 
@@ -489,16 +105,376 @@ onBeforeUnmount(() => {
 								<span>加载中...</span>
 							</div>
 						</div>
-						<!-- <div v-else class="comment-loading">
-							<div class="loading-spinner"></div>
-							<span>加载评论中...</span>
-						</div> -->
 					</div>
 				</div>
 			</div>
 		</Teleport>
 	</div>
 </template>
+
+<script setup>
+import { ref, onMounted, computed, watch, nextTick, onBeforeUnmount } from "vue";
+import api from "@/api";
+import { useRoute } from "vue-router";
+
+const route = useRoute();
+const songId = computed(() => route.query.id);
+
+// 歌曲信息
+const songTitle = ref("正在播放的歌曲");
+const songArtist = ref("未知艺术家");
+const songAlbum = ref("未知专辑");
+const songCover = ref("https://via.placeholder.com/260x260.png?text=Cover");
+
+// 歌词
+const lyrics = ref([]);
+
+// 播放相关
+const audioUrl = ref("");
+const currentTime = ref(0);
+const duration = ref(0);
+const isPlaying = ref(false);
+const audioRef = ref(null);
+
+// 单曲循环
+const isLoop = ref(false);
+
+// 评论相关
+const isCommentModalVisible = ref(false);
+const comments = ref([]);
+const commentLoading = ref(false);
+const commentTotal = ref(0);
+const commentPage = ref(1);
+const commentHasMore = ref(true);
+const commentLoadingMore = ref(false);
+const sortType = ref("hot"); // 'hot' 或 'time'
+
+// 存储事件处理器，用于清理
+let playHandler = null;
+let pauseHandler = null;
+let endedHandler = null;
+let timeUpdateHandler = null;
+let loadedMetadataHandler = null;
+
+// 高亮歌词索引
+const highlightIndex = computed(() => {
+	if (!lyrics.value.length) return -1;
+	const time = currentTime.value;
+	let index = -1;
+	for (let i = 0; i < lyrics.value.length; i++) {
+		if (lyrics.value[i].time <= time) index = i;
+		else break;
+	}
+	return index;
+});
+
+// 歌词自动滚动
+watch(highlightIndex, newIndex => {
+	if (newIndex >= 0) {
+		nextTick(() => {
+			const lines = document.querySelectorAll(".lyrics-line");
+			if (lines[newIndex]) {
+				lines[newIndex].scrollIntoView({ behavior: "smooth", block: "center" });
+			}
+		});
+	}
+});
+
+// 监听歌曲ID变化，重新加载
+watch(songId, () => {
+	if (audioRef.value) {
+		audioRef.value.pause();
+		isPlaying.value = false;
+		currentTime.value = 0;
+		duration.value = 0;
+	}
+	if (isCommentModalVisible.value) isCommentModalVisible.value = false;
+	comments.value = [];
+	commentTotal.value = 0;
+	loadSongData();
+});
+
+// 监听audioUrl变化，重新绑定事件（因为v-if会重建audio元素）
+watch(audioUrl, () => {
+	nextTick(() => {
+		bindAudioEvents();
+	});
+});
+
+// 监听循环模式变化，同步到audio元素
+watch(isLoop, newVal => {
+	if (audioRef.value) {
+		audioRef.value.loop = newVal;
+	}
+});
+
+// 控制body滚动（弹窗时禁止滚动）
+watch(isCommentModalVisible, newVal => {
+	document.body.style.overflow = newVal ? "hidden" : "";
+});
+
+// 绑定audio事件（确保播放状态同步）
+const bindAudioEvents = () => {
+	const audio = audioRef.value;
+	if (!audio) return;
+
+	// 移除旧监听
+	if (playHandler) audio.removeEventListener("play", playHandler);
+	if (pauseHandler) audio.removeEventListener("pause", pauseHandler);
+	if (endedHandler) audio.removeEventListener("ended", endedHandler);
+	if (timeUpdateHandler) audio.removeEventListener("timeupdate", timeUpdateHandler);
+	if (loadedMetadataHandler) audio.removeEventListener("loadedmetadata", loadedMetadataHandler);
+
+	// 定义新处理函数
+	playHandler = () => {
+		isPlaying.value = true;
+	};
+	pauseHandler = () => {
+		isPlaying.value = false;
+	};
+	endedHandler = () => {
+		if (!isLoop.value) isPlaying.value = false;
+	};
+	timeUpdateHandler = () => {
+		if (!audio) return;
+		currentTime.value = audio.currentTime || 0;
+		if (audio.duration) duration.value = audio.duration;
+	};
+	loadedMetadataHandler = () => {
+		if (!audio) return;
+		duration.value = audio.duration || 0;
+		currentTime.value = audio.currentTime || 0;
+	};
+
+	// 添加新监听
+	audio.addEventListener("play", playHandler);
+	audio.addEventListener("pause", pauseHandler);
+	audio.addEventListener("ended", endedHandler);
+	audio.addEventListener("timeupdate", timeUpdateHandler);
+	audio.addEventListener("loadedmetadata", loadedMetadataHandler);
+
+	// 同步loop属性
+	audio.loop = isLoop.value;
+};
+
+// 工具函数
+const fmtTime = seconds => {
+	if (!seconds || !Number.isFinite(seconds)) return "00:00";
+	const s = Math.floor(seconds);
+	const m = Math.floor(seconds / 60);
+	const rs = s % 60;
+	return `${m.toString().padStart(2, "0")}:${rs.toString().padStart(2, "0")}`;
+};
+
+const fmtCommentTime = timestamp => {
+	if (!timestamp) return "未知时间";
+	const date = new Date(timestamp);
+	return `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, "0")}-${date.getDate().toString().padStart(2, "0")}`;
+};
+
+// API 请求
+const fetchSongDetail = async () => {
+	try {
+		const id = songId.value;
+		if (!id) return;
+		const res = await api.get("/song/detail", { ids: id });
+		const detail = res.songs?.[0];
+		if (detail) {
+			songTitle.value = detail.name || "未知歌曲";
+			songArtist.value = detail.ar.map(artist => artist.name).join(", ") || "未知艺术家";
+			songAlbum.value = detail.al?.name || "未知专辑";
+			songCover.value = detail.al?.picUrl || "https://via.placeholder.com/260x260.png?text=Cover+Unavailable";
+		}
+	} catch (error) {
+		console.error("获取歌曲详情失败:", error);
+	}
+};
+
+const fetchLyrics = async () => {
+	try {
+		const id = songId.value;
+		if (!id) return;
+		const res = await api.get("/lyric", { id });
+		const raw = res.lrc?.lyric || "";
+		lyrics.value = parseLyric(raw);
+	} catch (error) {
+		console.error("获取歌词失败:", error);
+		lyrics.value = [];
+	}
+};
+
+const parseLyric = raw => {
+	if (!raw) return [];
+	const lines = raw.split("\n");
+	const lyricItems = [];
+	const timeRegex = /\[(\d{2}):(\d{2})(?:\.(\d{2,3}))?\]/g;
+	for (const line of lines) {
+		const trimmedLine = line.trim();
+		if (!trimmedLine) continue;
+		let match;
+		let firstTime = null;
+		let text = trimmedLine;
+		const times = [];
+		while ((match = timeRegex.exec(trimmedLine)) !== null) {
+			const minutes = parseInt(match[1], 10);
+			const seconds = parseInt(match[2], 10);
+			let milliseconds = 0;
+			if (match[3]) milliseconds = parseInt(match[3].padEnd(3, "0"), 10);
+			times.push(minutes * 60 + seconds + milliseconds / 1000);
+		}
+		if (times.length > 0) {
+			firstTime = times[0];
+			text = trimmedLine.replace(/\[[^\]]*\]/g, "").trim();
+		}
+		if (firstTime !== null && text) {
+			lyricItems.push({ time: firstTime, text });
+		}
+	}
+	lyricItems.sort((a, b) => a.time - b.time);
+	return lyricItems;
+};
+
+const fetchSongUrl = async () => {
+	try {
+		const id = songId.value;
+		if (!id) return;
+		const res = await api.get("/song/url", { id });
+		const item = res.data?.[0];
+		audioUrl.value = item?.url || "";
+		currentTime.value = 0;
+		duration.value = 0;
+		isPlaying.value = false;
+	} catch (error) {
+		console.error("获取播放地址失败:", error);
+	}
+};
+
+const loadSongData = async () => {
+	await Promise.all([fetchSongDetail(), fetchLyrics(), fetchSongUrl()]);
+};
+
+// 播放控制
+const handleTogglePlay = () => {
+	const audio = audioRef.value;
+	if (!audio || !audioUrl.value) return;
+	if (audio.paused) {
+		audio.play().catch(err => console.error("播放失败:", err));
+	} else {
+		audio.pause();
+	}
+};
+
+const handleProgressClick = e => {
+	const bar = e.currentTarget;
+	const rect = bar.getBoundingClientRect();
+	const ratio = (e.clientX - rect.left) / rect.width;
+	const audio = audioRef.value;
+	if (!audio) return;
+	audio.currentTime = ratio * duration.value;
+};
+
+// 单曲循环切换
+const toggleLoop = () => {
+	isLoop.value = !isLoop.value;
+};
+
+// 评论相关函数
+const fetchComments = async (reset = true) => {
+	const id = songId.value;
+	if (!id) return;
+	if (reset) {
+		commentPage.value = 1;
+		comments.value = [];
+		commentHasMore.value = true;
+		commentLoading.value = true;
+	} else {
+		if (!commentHasMore.value || commentLoadingMore.value) return;
+		commentLoadingMore.value = true;
+	}
+	try {
+		const limit = 30;
+		const offset = (commentPage.value - 1) * limit;
+		const res = await api.get("/comment/music", { id, limit, offset });
+		if (res.code === 200) {
+			const newComments = res.comments || [];
+			if (reset) {
+				comments.value = newComments;
+			} else {
+				comments.value = [...comments.value, ...newComments];
+			}
+			commentTotal.value = res.total || 0;
+			commentHasMore.value = comments.value.length < commentTotal.value;
+			applySort();
+		} else {
+			if (reset) comments.value = [];
+			commentHasMore.value = false;
+		}
+	} catch (error) {
+		console.error("获取评论失败:", error);
+		if (reset) comments.value = [];
+		commentHasMore.value = false;
+	} finally {
+		if (reset) {
+			commentLoading.value = false;
+		} else {
+			commentLoadingMore.value = false;
+		}
+	}
+};
+
+const loadMoreComments = () => {
+	if (!commentHasMore.value || commentLoadingMore.value || commentLoading.value) return;
+	commentPage.value++;
+	fetchComments(false);
+};
+
+const openCommentModal = () => {
+	if (!songId.value) return;
+	isCommentModalVisible.value = true;
+	fetchComments(true);
+};
+
+const closeCommentModal = () => {
+	isCommentModalVisible.value = false;
+};
+
+const stopPropagation = e => e.stopPropagation();
+
+const applySort = () => {
+	if (!comments.value.length) return;
+	if (sortType.value === "hot") {
+		comments.value.sort((a, b) => (b.likedCount || 0) - (a.likedCount || 0));
+	} else if (sortType.value === "time") {
+		comments.value.sort((a, b) => (b.time || 0) - (a.time || 0));
+	}
+};
+
+const changeSortType = type => {
+	if (sortType.value === type) return;
+	sortType.value = type;
+	applySort();
+};
+
+// 生命周期
+onMounted(() => {
+	loadSongData();
+	nextTick(() => {
+		bindAudioEvents();
+	});
+});
+
+onBeforeUnmount(() => {
+	document.body.style.overflow = "";
+	const audio = audioRef.value;
+	if (audio) {
+		if (playHandler) audio.removeEventListener("play", playHandler);
+		if (pauseHandler) audio.removeEventListener("pause", pauseHandler);
+		if (endedHandler) audio.removeEventListener("ended", endedHandler);
+		if (timeUpdateHandler) audio.removeEventListener("timeupdate", timeUpdateHandler);
+		if (loadedMetadataHandler) audio.removeEventListener("loadedmetadata", loadedMetadataHandler);
+	}
+});
+</script>
 
 <style scoped>
 .player-page {
@@ -533,7 +509,7 @@ onBeforeUnmount(() => {
 	align-items: center;
 }
 
-.cover-wrap {
+.cover-wrapr {
 	width: 260px;
 	height: 260px;
 	border-radius: 50%;
@@ -693,6 +669,12 @@ onBeforeUnmount(() => {
 	align-items: center;
 	justify-content: center;
 	box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+	transition: all 0.2s ease;
+}
+
+.btn-circle:hover {
+	transform: translateY(-2px);
+	background: #f0f0f0;
 }
 
 .btn-large {
@@ -705,10 +687,6 @@ onBeforeUnmount(() => {
 	width: 40px;
 	height: 40px;
 	font-size: 18px;
-}
-
-.btn-circle:hover {
-	transform: translateY(-1px);
 }
 
 .progress-wrap {
@@ -873,10 +851,38 @@ onBeforeUnmount(() => {
 }
 
 .comment-stat {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	margin-bottom: 18px;
 	font-size: 13px;
 	color: #bbb;
-	margin-bottom: 18px;
-	font-weight: 500;
+}
+
+.sort-buttons {
+	display: flex;
+	gap: 12px;
+}
+
+.sort-btn {
+	background: transparent;
+	border: none;
+	color: #aaa;
+	font-size: 13px;
+	cursor: pointer;
+	padding: 4px 8px;
+	border-radius: 20px;
+	transition: all 0.2s;
+}
+
+.sort-btn:hover {
+	color: #fff;
+	background: rgba(255, 255, 255, 0.1);
+}
+
+.sort-btn.active {
+	color: #ff7e5e;
+	background: rgba(255, 126, 94, 0.15);
 }
 
 .comment-list {
@@ -996,6 +1002,23 @@ onBeforeUnmount(() => {
 	}
 }
 
+.load-more-btn {
+	text-align: center;
+	margin-top: 20px;
+	padding: 10px;
+	background: rgba(255, 255, 255, 0.05);
+	border-radius: 30px;
+	cursor: pointer;
+	font-size: 14px;
+	color: #ccc;
+	transition: all 0.2s;
+}
+
+.load-more-btn:hover {
+	background: rgba(255, 255, 255, 0.1);
+	color: #fff;
+}
+
 @media (max-width: 960px) {
 	.player-inner {
 		flex-direction: column;
@@ -1013,55 +1036,5 @@ onBeforeUnmount(() => {
 	.comment-modal-container {
 		max-width: 90%;
 	}
-}
-.comment-stat {
-	display: flex;
-	justify-content: space-between;
-	align-items: center;
-	margin-bottom: 18px;
-	font-size: 13px;
-	color: #bbb;
-}
-
-.sort-buttons {
-	display: flex;
-	gap: 12px;
-}
-
-.sort-btn {
-	background: transparent;
-	border: none;
-	color: #aaa;
-	font-size: 13px;
-	cursor: pointer;
-	padding: 4px 8px;
-	border-radius: 20px;
-	transition: all 0.2s;
-}
-
-.sort-btn:hover {
-	color: #fff;
-	background: rgba(255, 255, 255, 0.1);
-}
-
-.sort-btn.active {
-	color: #ff7e5e;
-	background: rgba(255, 126, 94, 0.15);
-}
-
-.load-more-btn {
-	text-align: center;
-	margin-top: 20px;
-	padding: 10px;
-	background: rgba(255, 255, 255, 0.05);
-	border-radius: 30px;
-	cursor: pointer;
-	font-size: 14px;
-	color: #ccc;
-	transition: all 0.2s;
-}
-.load-more-btn:hover {
-	background: rgba(255, 255, 255, 0.1);
-	color: #fff;
 }
 </style>

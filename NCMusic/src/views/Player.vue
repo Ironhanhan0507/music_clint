@@ -11,7 +11,12 @@
 						</div>
 					</div>
 					<div class="song-meta">
-						<h2 class="song-title">{{ songTitle }}</h2>
+						<div class="song-header">
+							<h2 class="song-title">{{ songTitle }}</h2>
+							<button class="like-btn" :class="{ liked: isLiked }" @click="toggleLike" :disabled="likeLoading || !isLoggedIn" :title="isLiked ? '取消喜欢' : '喜欢'">
+								{{ isLiked ? "❤️" : "🤍" }}
+							</button>
+						</div>
 						<p class="song-artist">{{ songArtist }}</p>
 						<p class="song-album">{{ songAlbum }}</p>
 						<p class="playlist-index" v-if="playlistTracks.length">{{ currentTrackIndex + 1 }} / {{ playlistTracks.length }}</p>
@@ -168,6 +173,14 @@ const duration = ref(0);
 const isPlaying = ref(false);
 const audioRef = ref(null);
 const autoPlayNext = ref(false);
+
+// 喜欢相关状态
+const isLiked = ref(false);
+const likeLoading = ref(false);
+const isLoggedIn = ref(false);
+const likePlaylistId = ref(null);
+const userLikedSongIds = ref(new Set()); // 用于快速判断喜欢状态
+const currentUserId = ref(null);
 
 // 评论相关
 const isCommentModalVisible = ref(false);
@@ -559,6 +572,138 @@ const fmtTime = seconds => {
 	return `${m.toString().padStart(2, "0")}:${rs.toString().padStart(2, "0")}`;
 };
 
+// ------------------- 喜欢功能 -------------------
+// 获取当前用户信息及喜欢歌单ID
+const fetchUserInfo = async () => {
+	try {
+		// 获取用户信息
+		const userRes = await api.get("/user/account");
+		if (userRes.code === 200 && userRes.profile) {
+			currentUserId.value = userRes.profile.userId;
+			isLoggedIn.value = true;
+
+			// 获取用户歌单列表，找到"我喜欢的音乐"
+			const playlistRes = await api.get("/user/playlist", { uid: currentUserId.value });
+			if (playlistRes.code === 200 && playlistRes.playlist) {
+				const likedPlaylist = playlistRes.playlist.find(pl => pl.name === "我喜欢的音乐" || pl.specialType === 5);
+				if (likedPlaylist) {
+					likePlaylistId.value = likedPlaylist.id;
+				}
+			}
+
+			// 获取喜欢歌曲列表
+			await fetchUserLikedSongs();
+		}
+	} catch (error) {
+		console.error("获取用户信息失败:", error);
+		isLoggedIn.value = false;
+	}
+};
+
+// 获取用户喜欢的歌曲ID列表
+const fetchUserLikedSongs = async () => {
+	if (!currentUserId.value) return;
+	try {
+		const res = await api.get("/likelist", { uid: currentUserId.value });
+		if (res.code === 200 && res.ids) {
+			userLikedSongIds.value = new Set(res.ids);
+			updateCurrentSongLikedStatus();
+		}
+	} catch (error) {
+		console.error("获取喜欢列表失败:", error);
+	}
+};
+
+// 更新当前歌曲的喜欢状态
+const updateCurrentSongLikedStatus = () => {
+	if (!songId.value) {
+		isLiked.value = false;
+		return;
+	}
+	isLiked.value = userLikedSongIds.value.has(Number(songId.value));
+};
+
+// 刷新当前歌单（仅当当前歌单是"我喜欢"时使用）
+const refreshCurrentPlaylist = async () => {
+	// 只有当当前显示的确实是"我喜欢"歌单时才刷新
+	if (!likePlaylistId.value || playlistId.value != likePlaylistId.value) {
+		return;
+	}
+
+	const currentSongId = songId.value;
+	// 重新加载歌单
+	await loadPlaylist();
+
+	// 查找当前歌曲是否还在新歌单中
+	const newIndex = playlistTracks.value.findIndex(track => track.id == currentSongId);
+
+	if (newIndex !== -1) {
+		// 歌曲还在，更新索引
+		currentTrackIndex.value = newIndex;
+		updateCurrentTrackIndex();
+		if (playMode.value === "random") {
+			resetRandomMode();
+		}
+	} else {
+		// 当前歌曲已被移除（取消喜欢时），自动切换到歌单第一首
+		if (playlistTracks.value.length > 0) {
+			const firstSongId = playlistTracks.value[0].id;
+			await switchToSongId(firstSongId, true);
+		} else {
+			// 歌单为空，清空播放
+			audioUrl.value = "";
+			songTitle.value = "暂无歌曲";
+			isPlaying.value = false;
+		}
+	}
+};
+
+// 切换喜欢状态
+const toggleLike = async () => {
+	if (!isLoggedIn.value) {
+		alert("请先登录");
+		return;
+	}
+	if (likeLoading.value || !songId.value) return;
+
+	likeLoading.value = true;
+	const willLike = !isLiked.value;
+
+	try {
+		// 调用喜欢/取消喜欢接口
+		const res = await api.get("/like", {
+			id: songId.value,
+			like: willLike,
+		});
+
+		if (res.code === 200) {
+			// 更新本地喜欢状态集合
+			if (willLike) {
+				userLikedSongIds.value.add(Number(songId.value));
+			} else {
+				userLikedSongIds.value.delete(Number(songId.value));
+			}
+			isLiked.value = willLike;
+
+			// 如果当前歌单是"我喜欢"，需要刷新歌单列表
+			if (likePlaylistId.value && playlistId.value == likePlaylistId.value) {
+				await refreshCurrentPlaylist();
+			}
+		} else {
+			console.error("操作失败:", res);
+		}
+	} catch (error) {
+		console.error("切换喜欢状态失败:", error);
+	} finally {
+		likeLoading.value = false;
+	}
+};
+
+// 监听歌曲切换，更新喜欢状态
+watch(songId, () => {
+	updateCurrentSongLikedStatus();
+});
+
 // ------------------- 评论功能（无排序，按 API 原始顺序） -------------------
 const fmtCommentTime = timestamp => {
 	if (!timestamp) return "未知时间";
@@ -675,6 +820,7 @@ watch(isCommentModalVisible, newVal => {
 
 // 生命周期
 onMounted(async () => {
+	await fetchUserInfo();
 	await loadPlaylist();
 	updateCurrentTrackIndex();
 	await Promise.all([fetchSongDetail(), fetchLyrics(), fetchSongUrl()]);
@@ -754,12 +900,45 @@ onBeforeUnmount(() => {
 .song-meta {
 	margin-top: 20px;
 	text-align: center;
+	width: 100%;
+}
+
+.song-header {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 12px;
+	margin-bottom: 6px;
 }
 
 .song-title {
 	margin: 0;
 	font-size: 22px;
 	font-weight: 600;
+}
+
+.like-btn {
+	background: transparent;
+	border: none;
+	font-size: 24px;
+	cursor: pointer;
+	padding: 0;
+	transition: all 0.2s ease;
+	color: rgba(255, 255, 255, 0.7);
+}
+
+.like-btn:hover:not(:disabled) {
+	transform: scale(1.1);
+}
+
+.like-btn.liked {
+	color: #ff4b2b;
+	text-shadow: 0 0 8px rgba(255, 75, 43, 0.5);
+}
+
+.like-btn:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
 }
 
 .song-artist,
